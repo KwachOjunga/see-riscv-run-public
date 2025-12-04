@@ -2,9 +2,9 @@
 
 **A Comprehensive Guide to RISC-V Architecture**
 
-**Author**: Danny Jiang  
-**Version**: Draft v0p9  
-**License**: CC BY 4.0 International  
+**Author**: Danny Jiang
+**Version**: Draft v0p10
+**License**: CC BY 4.0 International
 **Language**: English | [繁體中文](README-zh-TW.md)
 
 ---
@@ -61,7 +61,7 @@ All Markdown source files are available in this repository:
 - **English Version**: `manuscript/`
 - **Traditional Chinese Version**: `manuscript-zh-TW/`
 
-**Current Version**: Draft v0p9 - December 2025
+**Current Version**: Draft v0p10 - December 2025
 
 ---
 
@@ -110,7 +110,7 @@ If you use this book in your research or teaching, please cite:
 
 ```
 Danny Jiang. (2025). See RISC-V Run: Fundamentals - A Comprehensive Guide to RISC-V Architecture.
-Licensed under CC BY 4.0. https://github.com/djiangtw/see-riscv-run
+Licensed under CC BY 4.0. https://github.com/djiangtw/see-riscv-run-public
 ```
 
 ---

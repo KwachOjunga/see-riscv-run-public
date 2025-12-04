@@ -2,7 +2,7 @@
 title: "See RISC-V Run: Fundamentals"
 subtitle: "A Comprehensive Guide to RISC-V Architecture"
 author: "Danny Jiang"
-version: "Draft v0p9"
+version: "Draft v0p10"
 date: "December 2025"
 ---
 
@@ -16,7 +16,7 @@ date: "December 2025"
 
 **Danny Jiang**
 
-**Draft v0p9 - December 2025**
+**Draft v0p10 - December 2025**
 
 **Complete Book:**
 

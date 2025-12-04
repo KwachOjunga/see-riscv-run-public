@@ -658,7 +658,3 @@ In this chapter, we explored the fundamentals of RISC-V pipelining:
 RISC-V's clean, regular ISA makes it ideal for efficient pipeline implementation. The absence of delay slots and complex addressing modes simplifies pipeline control compared to older architectures like MIPS.
 
 In the next chapter, we'll explore **out-of-order execution**, where processors dynamically reorder instructions to extract even more parallelism and performance.
-
----
-
-**Chapter 7 Complete** (~6,800 words)

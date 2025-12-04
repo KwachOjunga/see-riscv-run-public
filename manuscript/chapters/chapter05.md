@@ -422,19 +422,3 @@ Physical Memory Protection (PMP) provides memory protection without virtual memo
 Compared to ARM's translation system, RISC-V's is simpler and more regular. ARM uses complex descriptor formats with multiple page sizes and attributes. RISC-V uses a single PTE format with clean flag bits. ARM's ASID is 16 bits; RISC-V's is 16 bits in Sv39 and 9 bits in Sv48. Both support superpages, but RISC-V's approach is more uniform—any level can be a leaf.
 
 RISC-V's virtual memory design reflects its philosophy: provide a clean, minimal mechanism that's easy to implement and understand, while supporting the features needed for modern operating systems. The result is a system that's simpler than ARM's but equally capable for most applications.
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 5 - Virtual Memory & Paging (Sv39 / Sv48)
-**Part**: IV - Memory & Addressing
-**Version**: Draft v1p0
-**Word Count**: ~4,800 words
-**Sections**: 6
-**Code Examples**: 10+
-**Tables**: 3+
-
--->

@@ -578,15 +578,3 @@ What type of fence?
 - **Linux Kernel Memory Barriers**: Documentation/memory-barriers.txt
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: F - Memory Model Quick Reference
-**Version**: Draft v1p0
-**Word Count**: ~1,800 words
-**Tables**: 8+
-**Code Examples**: 20+
-
--->

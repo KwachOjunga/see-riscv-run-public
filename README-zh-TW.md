@@ -2,9 +2,9 @@
 
 **RISC-V 架構完整指南**
 
-**作者**：Danny Jiang  
-**版本**：Draft v0p9  
-**授權**：CC BY 4.0 International  
+**作者**：Danny Jiang
+**版本**：Draft v0p10
+**授權**：CC BY 4.0 International
 **語言**：[English](README.md) | 繁體中文
 
 ---
@@ -61,7 +61,7 @@
 - **英文版**：`manuscript/`
 - **繁體中文版**：`manuscript-zh-TW/`
 
-**目前版本**：Draft v0p9 - 2025 年 12 月
+**目前版本**：Draft v0p10 - 2025 年 12 月
 
 ---
 
@@ -110,7 +110,7 @@
 
 ```
 Danny Jiang. (2025). See RISC-V Run: Fundamentals - RISC-V 架構完整指南.
-採用 CC BY 4.0 授權. https://github.com/djiangtw/see-riscv-run
+採用 CC BY 4.0 授權. https://github.com/djiangtw/see-riscv-run-public
 ```
 
 ---

@@ -705,19 +705,3 @@ Common synchronization patterns include spinlocks (using AMOSWAP or LR/SC), mute
 Compared to ARM and x86, RISC-V's memory model is similar to ARM's (both are weakly ordered) but simpler and more formally specified. x86's TSO model is stronger, preserving more orderings by default, which simplifies programming but may reduce performance. RISC-V's RVTSO extension provides x86 compatibility when needed.
 
 Memory ordering bugs are notoriously difficult to debug—they occur rarely, non-deterministically, and may disappear when debugging code is added. Strategies include using memory model checking tools (herd7, rmem), thread sanitizers (ThreadSanitizer), formal verification, and careful code review. RISC-V's formal memory model specification enables rigorous verification of concurrent algorithms.
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 6 - Memory Ordering & Synchronization
-**Part**: IV - Memory & Addressing
-**Version**: Draft v1p0
-**Word Count**: ~8,000 words
-**Sections**: 7
-**Code Examples**: 20+
-**Tables**: 4+
-
--->

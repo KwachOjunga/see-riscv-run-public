@@ -2,7 +2,7 @@
 title: "See RISC-V Run: Fundamentals（繁體中文版）"
 subtitle: "RISC-V 架構完整指南"
 author: "Danny Jiang"
-version: "Draft v0p9"
+version: "Draft v0p10"
 date: "2025 年 12 月"
 ---
 
@@ -18,7 +18,7 @@ date: "2025 年 12 月"
 
 **Danny Jiang**
 
-**Draft v0p9 - 2025 年 12 月**
+**Draft v0p10 - 2025 年 12 月**
 
 **完整書籍：**
 

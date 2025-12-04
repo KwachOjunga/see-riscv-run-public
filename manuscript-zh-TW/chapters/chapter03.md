@@ -480,7 +480,7 @@ halt:
 
 ---
 
-## 總結
+## Summary
 
 RISC-V 的 privilege 架構為分離 system software 責任提供了簡潔、靈活的 model。三個 privilege level——Machine (M-mode)、Supervisor (S-mode) 和 User (U-mode)——形成層次結構，每個 level 都有明確定義的能力和限制。M-mode 是強制性的，具有不受限制的硬體存取權限，適合 firmware 和 bootloader。S-mode 是可選的，專為 operating system 設計，對 privileged operation 和 virtual memory 具有受控存取。U-mode 是可選的，用於 application，具有最小 privilege 和強隔離。
 
@@ -493,31 +493,3 @@ Execution Environment Interface (EEI) 定義了程式如何與其 execution envi
 與 ARM 的四個 exception level (EL0-EL3) 相比，RISC-V 的三個 privilege level 更簡單、更靈活。ARM 的 EL3 (Secure Monitor) 和 EL2 (Hypervisor) 在 ARMv8-A 中始終存在，即使未使用。RISC-V 使 S-mode 和 U-mode 可選，並將 hypervisor 支援作為 extension 添加。這種模組化允許 RISC-V 從微型 microcontroller 擴展到高性能 server，而不會帶來不必要的複雜性。
 
 Privilege 架構反映了 RISC-V 的設計哲學：提供最少的強制性功能，使其他一切都可選，並保持關注點的清晰分離。這種方法使跨廣泛應用的高效實現成為可能，同時保留在需要時添加高級功能的靈活性。
-
----
-
-## Chapter Metadata
-
-**Chapter**: 3 - Privilege Level 與 Execution Environment
-**Part**: II - RISC-V Execution Model
-**版本**: Draft v0p1（繁體中文版）
-**字數**: ~5,000 字
-**Section**: 3
-**程式碼範例**: 2
-**圖表**: 3
-
-**關鍵要點**：
-
-1. 三個 privilege level (M/S/U)，M-mode 強制，S/U 可選
-2. Hypervisor extension 添加 VS/VU mode 用於虛擬化
-3. SBI 提供 M-mode 和 S-mode 之間的標準化介面
-4. EEI 定義程式與 execution environment 的互動
-5. 比 ARM 的四層 model 更簡單、更靈活
-
-**技術亮點**：
-
-- RISC-V privilege 層次結構圖
-- Hypervisor extension 架構
-- RISC-V vs ARM privilege model 比較
-- SBI timer 設置範例
-- Bare-metal startup code 範例

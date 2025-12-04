@@ -641,19 +641,3 @@ RISC-V 的靈活性允許 in-order（Rocket、SiFive E/U-series）和 OOO（BOOM
 RISC-V 的乾淨 ISA 使其成為簡單 in-order core 和複雜 OOO 設計的絕佳目標。架構不會施加不必要的限制，允許 microarchitect 自由創新。
 
 在下一章中，我們將從硬體轉向軟體，探討 RISC-V 系統如何 boot 以及 firmware 和 operating system 如何與硬體互動。
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 8 - Microarchitecture Variations
-**Part**: V - Pipeline & Microarchitecture
-**Version**: Draft v0p1（繁體中文版）
-**Word Count**: ~5,500 字
-**Sections**: 8
-**Code Examples**: 10+
-**Diagrams**: 7
-
--->

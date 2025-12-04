@@ -684,19 +684,3 @@ The Core-Local Interrupt Controller (CLIC) extends RISC-V with vectored interrup
 The Advanced Interrupt Architecture (AIA) brings message-signaled interrupts (MSI), interrupt virtualization, and scalable interrupt delivery to RISC-V. The Incoming MSI Controller (IMSIC) receives MSI writes and signals interrupts to harts. The Advanced PLIC (APLIC) converts wired interrupts to MSIs. Together, they enable efficient interrupt handling in large multi-core systems and virtualized environments.
 
 Compared to ARM's Generic Interrupt Controller (GIC), RISC-V's interrupt architecture is more modular. Simple systems use the basic PLIC. Real-time systems add CLIC for low latency. High-performance systems add AIA for MSI and virtualization. ARM's GIC provides all features in one controller, which ensures consistency but mandates complexity even for simple systems. RISC-V's approach allows implementations to choose the right level of complexity for their needs.
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 4 - Trap, Exception, Interrupt
-**Part**: III - Control Transfer & Exception System
-**Version**: Draft v1p0
-**Word Count**: ~7,500 words
-**Sections**: 8
-**Code Examples**: 15+
-**Tables**: 5+
-
--->

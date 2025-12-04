@@ -637,7 +637,3 @@ In this chapter, we explored advanced microarchitecture techniques for high-perf
 RISC-V's clean ISA makes it an excellent target for both simple in-order cores and complex OOO designs. The architecture doesn't impose unnecessary constraints, allowing microarchitects to innovate freely.
 
 In the next chapter, we'll shift focus from hardware to software, exploring how RISC-V systems boot and how firmware and operating systems interact with the hardware.
-
----
-
-**Chapter 8 Complete** (~5,500 words)

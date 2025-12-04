@@ -726,15 +726,3 @@ void system_reboot(void) {
 - **Linux RISC-V SBI Implementation**: arch/riscv/kernel/sbi.c
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: D - SBI Call Reference
-**Version**: Draft v1p0
-**Word Count**: ~2,200 words
-**Tables**: 10+
-**Code Examples**: 20+
-
--->

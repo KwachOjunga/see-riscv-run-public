@@ -439,15 +439,3 @@ jump_table:
 - **ARM Procedure Call Standard**: AAPCS64
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: E - RISC-V vs ARM Instruction Comparison
-**Version**: Draft v1p0
-**Word Count**: ~1,800 words
-**Tables**: 15+
-**Code Examples**: 10+
-
--->

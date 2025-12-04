@@ -444,7 +444,7 @@ RISC-V 不僅代表一個新的 ISA，而且代表處理器架構的新模式：
 
 ---
 
-## 總結
+## Summary
 
 RISC-V 建立在 30 年 RISC 架構演進的基礎上，從 MIPS、SPARC、ARM 和 PowerPC 的成功和錯誤中學習。1980 年代的 RISC 革命證明了簡單、規則的 instruction set 可以超越複雜的 instruction set，建立了 RISC-V 今天遵循的原則：load-store 架構、固定長度 instruction、簡單的 addressing mode 和大型 register file。
 
@@ -457,34 +457,3 @@ RISC-V 的設計哲學強調**簡潔性**（base ISA 中只有 47 個 instructio
 與 ARM 和 MIPS 相比，RISC-V 更簡單（更少的 instruction，更簡潔的 encoding）、更現代（沒有歷史包袱）且完全開放（沒有授權費用或限制）。雖然 ARM 主導行動裝置，MIPS 已經衰落，但 RISC-V 在 embedded system 中迅速獲得採用，在 application processor 中嶄露頭角，並成為教育和研究的首選架構。
 
 RISC-V 不僅代表一個新的 ISA，而且代表處理器架構的新模式：開放、協作，並且不受 vendor lock-in 的限制。這種開放性，結合技術卓越性和業界支援，使 RISC-V 成為下一代計算的架構。
-
----
-
-## Chapter Metadata
-
-**Chapter**: 1 - 什麼是 RISC-V？
-**Part**: I - 導論
-**版本**: Draft v0p1
-**字數**: ~5,500 字
-**Section**: 6
-**圖表**: 3
-
-**撰寫重點**：
-
-- **目標讀者**：完全初學者、學生、任何 RISC-V 新手
-- **深度層級**：高階概覽、歷史背景、動機
-- **關鍵概念**：RISC 歷史、開放 ISA 運動、模組化、profile
-- **比較**：ARM vs MIPS vs RISC-V（授權、複雜度、生態系統）
-
-**讀者關鍵收穫**：
-
-1. RISC-V 建立在 30 年以上的 RISC 架構演進基礎上
-2. 開放 ISA 模式消除了授權費用和限制
-3. 模組化設計允許量身定制的實現（RV32I 到 RV64GCV）
-4. Profile 確保軟體可移植性（RVA22, RVA23）
-5. 比 ARM 簡單，比 MIPS 現代，完全開放
-
----
-
-**作者**: Danny Jiang
-**最後更新**: 2025-12-02

@@ -527,15 +527,3 @@ void fsbl_main(void) {
 - **Device Tree Specification**: https://devicetree.org/
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: C - Boot Loader Reference Implementation
-**Version**: Draft v1p0
-**Word Count**: ~1,800 words
-**Code Examples**: 10+
-**Tables**: 1+
-
--->

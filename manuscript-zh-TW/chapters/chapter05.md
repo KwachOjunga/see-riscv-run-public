@@ -707,7 +707,7 @@ void handle_tlb_flush_ipi(uint64_t va, uint64_t asid) {
 
 ---
 
-## 總結
+## Summary
 
 RISC-V 的 virtual memory system 透過簡潔的 paging 機制提供記憶體保護、address space 抽象和靈活的記憶體管理。`satp` CSR 控制 address translation，選擇 translation mode（Bare、Sv32、Sv39、Sv48），指定用於 TLB tagging 的 Address Space Identifier (ASID)，並指向 root page table。
 
@@ -722,42 +722,3 @@ Page fault 在硬體無法完成 translation 時發生：無效 PTE（V=0）、p
 與 ARM 的 translation system 相比，RISC-V 的更簡單、更規則。ARM 使用複雜的 descriptor format，具有多種 page size 和 attribute。RISC-V 使用單一 PTE format，具有簡潔的 flag bit。ARM 的 ASID 是 16 bit；RISC-V 在 Sv39 中是 16 bit，在 Sv48 中是 9 bit。兩者都支援 superpage，但 RISC-V 的方法更統一——任何層級都可以是 leaf。
 
 RISC-V 的 virtual memory 設計反映了其哲學：提供簡潔、最小的機制，易於實作和理解，同時支援現代作業系統所需的功能。結果是一個比 ARM 更簡單但對大多數應用同樣強大的系統。
-
----
-
-## Chapter Metadata
-
-**Chapter**: 5 - Virtual Memory & Paging (Sv39 / Sv48)
-**Part**: IV - Memory & Addressing
-**Word Count**: ~6,000 字
-**Code Examples**: 10+
-**Diagrams**: 2 (Mermaid diagrams)
-
-**Key Topics**:
-
-- Virtual memory overview (protection, abstraction, overcommitment, shared memory)
-- RISC-V virtual memory modes (Bare, Sv32, Sv39, Sv48, Sv57)
-- satp CSR (MODE, ASID, PPN)
-- Sv39 architecture (39-bit VA, 512 GB address space, 3-level page table)
-- Sv48 architecture (48-bit VA, 256 TB address space, 4-level page table)
-- Page Table Entry (PTE) format and flags
-- Superpage support (2 MB, 1 GB, 512 GB)
-- TLB management (SFENCE.VMA)
-- Page fault handling (demand paging, copy-on-write)
-- TLB shootdown (multi-processor)
-
-**Prerequisites**:
-
-- Chapter 2: Programmer's Model & Register Set
-- Chapter 3: Privilege Levels & Execution Environment
-- Chapter 4: Trap, Exception, Interrupt
-
-**Next Chapter**:
-
-- Chapter 6: Physical Memory Protection (PMP)
-
----
-
-**撰寫日期**: 2025-12-02
-**作者**: Danny Jiang
-**版本**: Draft v0p1（繁體中文版）

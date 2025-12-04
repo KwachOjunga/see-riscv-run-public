@@ -644,19 +644,3 @@ Superscalar processor 更複雜，但可以達到更高的 IPC。4-issue supersc
 RISC-V 的乾淨、規則的 ISA 使其非常適合高效的 pipeline 實作。與 MIPS 等較舊的架構相比，沒有 delay slot 和複雜的 addressing mode 簡化了 pipeline control。
 
 在下一章中，我們將探討 **out-of-order execution**，其中處理器動態重新排序指令以提取更多 parallelism 和效能。
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 7 - RISC-V Pipeline Fundamentals
-**Part**: V - Pipeline & Microarchitecture
-**Version**: Draft v0p1（繁體中文版）
-**Word Count**: ~7,000 字
-**Sections**: 6
-**Code Examples**: 15+
-**Diagrams**: 6
-
--->

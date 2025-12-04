@@ -507,15 +507,3 @@ csrw mstatus, t0         # Restore original mstatus
 - **RISC-V ISA Manual**: CSR instructions and access rules
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: A - CSR Reference
-**Version**: Draft v1p0
-**Word Count**: ~2,500 words
-**Tables**: 15+
-**Code Examples**: 10+
-
--->

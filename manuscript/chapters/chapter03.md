@@ -418,19 +418,3 @@ The Execution Environment Interface (EEI) defines how programs interact with the
 Compared to ARM's four exception levels (EL0-EL3), RISC-V's three privilege levels are simpler and more flexible. ARM's EL3 (Secure Monitor) and EL2 (Hypervisor) are always present in ARMv8-A, even if unused. RISC-V makes S-mode and U-mode optional, and adds hypervisor support as an extension. This modularity allows RISC-V to scale from tiny microcontrollers to high-performance servers without carrying unnecessary complexity.
 
 The privilege architecture reflects RISC-V's design philosophy: provide minimal mandatory features, make everything else optional, and maintain clean separation of concerns. This approach enables efficient implementations across a wide range of applications while preserving the flexibility to add advanced features when needed.
-
----
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Chapter Metadata
-
-**Chapter**: 3 - Privilege Levels & Execution Environment
-**Part**: II - The RISC-V Execution Model
-**Version**: Draft v1p0
-**Word Count**: ~4,500 words
-**Sections**: 6
-**Code Examples**: 5+
-**Tables**: 3+
-
--->

@@ -542,15 +542,3 @@ bnez t1, has_atomic
 - **Extension Specifications**: Individual ratified extension documents
 
 ---
-
-<!-- METADATA (for authoring only, remove before publication)
-
-## Appendix Metadata
-
-**Appendix**: B - Extension Reference
-**Version**: Draft v1p0
-**Word Count**: ~2,000 words
-**Tables**: 10+
-**Code Examples**: 5+
-
--->
