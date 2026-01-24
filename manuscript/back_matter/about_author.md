@@ -54,4 +54,4 @@ This volume focuses on **fundamental concepts**—from ISA basics and programmer
 
 The book is licensed under **CC BY 4.0**, reflecting the author's commitment to open knowledge sharing, consistent with the RISC-V philosophy.
 
-**December 2025**
+**January 2026**

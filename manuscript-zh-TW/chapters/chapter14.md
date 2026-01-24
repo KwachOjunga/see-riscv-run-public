@@ -4,6 +4,48 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解碎片化問題**：掌握 ISA Fragmentation 對軟體生態的傷害
+2. **區分 Profile 類型**：明白 RVA (Application) 與 RVM (Microcontroller) 的應用場景差異
+3. **解讀 Profile 命名**：能夠解碼 RVA22S、RVM23 等命名規則的含義
+
+---
+
+## 💡 情境引入：單點還是套餐？
+
+> **場景**：小華桌上攤開著好幾家晶片廠商的規格書，一臉茫然。
+
+**小華**：「杰哥，我看這規格書看得眼花撩亂。這家廠商說支援 `RV64GC`，那家說支援 `RVA22`，還有一家寫 `RVM23`。我只是想跑個 Linux，到底要選哪一個？不能像以前買 x86 電腦那樣簡單嗎？」
+
+**阿杰**：「這就是 RISC-V 『太自由』帶來的副作用——**碎片化 (Fragmentation)**。以前大家隨便組裝指令集，你要 M、他要 F、我要 C，結果軟體寫好卻發現這顆 CPU 少了個指令，直接 Crash。」
+
+**小華**：「所以 Profile 就是來解決這個的？」
+
+**阿杰**：「沒錯。你可以把它想成是『**官方認證套餐**』：
+
+| 以前 (單點) | 現在 (Profile) |
+|------------|---------------|
+| 自己挑指令集 | 官方配好套餐 |
+| 忘了點浮點 = Linux 跑不起來 | 貼 RVA22 標籤 = 保證能跑 |
+| 每個產品都要驗證相容性 | 一個 ISO 跑所有合規硬體 |
+
+**RVA (Application Profile)** 是給 Linux/Android 這種富作業系統用的『豪華套餐』。只要廠商敢貼上 RVA22 的標籤，就代表它保證有 MMU、原子指令、浮點運算等一系列跑 Linux 必備的功能。」
+
+**小華**：「那 RVM 呢？」
+
+**阿杰**：「**RVM (Microcontroller Profile)** 是給 RTOS 或裸機用的『經濟套餐』。它拿掉了 MMU 這些重裝備，專注於低功耗和即時控制。如果你只是要做個智慧電鍋，選 RVM 就夠了；但如果你要做智慧手機，一定要選 RVA。」
+
+**小華**：「那後面的數字 20, 22, 23 是什麼？效能嗎？」
+
+**阿杰**：「不是效能，是**年份**。就像『2022 年式』的車款。RVA22 代表 2022 年定義的標準，RVA23 則加入了一些新功能（如更強的向量指令）。越新的 Linux 發行版，通常會要求越新的 Profile 年份。」
+
+**小華**：「懂了！所以我選 CPU 不用再一個個檢查指令了，只要確認它符合我需要的 Profile 套餐就行！」
+
+---
+
 RISC-V 的 modularity 既是優勢也是挑戰。Base ISA 是 minimal 的，implementation 選擇要包含哪些 extension。這種靈活性使針對特定 use case 的優化成為可能 — microcontroller 可能只包含 RV32IMC，而 server processor 可能實作 RV64IMAFDCV。但這種可變性造成了一個問題：software 如何知道有哪些 feature 可用？
 
 Platform profile 通過為特定 use case 定義 standard extension combination 來解決這個問題。Profile 指定 mandatory extension、optional extension 和 implementation requirement。針對 profile 的 software 可以假設某些 feature 存在，簡化 development 並提高 portability。RVA22 profile 定義了運行 rich operating system 的 application processor 的 requirement。RVA23 profile 添加了更新的 extension 和更嚴格的 requirement。Embedded profile 針對 microcontroller 和 real-time system。
@@ -465,6 +507,171 @@ Espressif 的 ESP32-C3 展示了 RISC-V 在 embedded 中的應用：
 - 更好的 toolchain（GCC、LLVM）
 - Open ISA（vs proprietary Xtensa）
 - Growing ecosystem
+
+---
+
+## 🛠️ 實作練習：Lab 14.1 — Profile 檢測器
+
+這個 Lab 將展示如何檢測當前硬體支援哪些 Extension，這是理解 Profile 實務應用的關鍵。
+
+### 實驗目標
+
+1. 讀取 `misa` CSR 查看支援的 Extension
+2. 檢查關鍵 CSR 是否存在
+3. 判斷當前系統符合哪個 Profile 等級
+
+### 程式碼 (profile_detect.c)
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// 讀取 misa CSR (需要 M-mode 權限)
+static inline uint64_t read_misa() {
+    uint64_t val;
+    asm volatile ("csrr %0, misa" : "=r" (val));
+    return val;
+}
+
+// Extension 檢查 (misa bit mapping: A=0, B=1, ..., Z=25)
+#define HAS_EXT(misa, letter) ((misa) & (1UL << ((letter) - 'A')))
+
+void check_profile(uint64_t misa) {
+    printf("=== RISC-V Profile Detector ===\n\n");
+
+    // 檢查 XLEN (MXL field in misa[63:62])
+    int xlen = (misa >> 62) == 2 ? 64 : 32;
+    printf("Base: RV%d\n", xlen);
+
+    // 列出支援的 Extension
+    printf("Extensions: ");
+    for (char c = 'A'; c <= 'Z'; c++) {
+        if (HAS_EXT(misa, c)) {
+            printf("%c", c);
+        }
+    }
+    printf("\n\n");
+
+    // RVA22 最低需求檢查
+    int has_m = HAS_EXT(misa, 'M');  // Integer Multiply
+    int has_a = HAS_EXT(misa, 'A');  // Atomics
+    int has_f = HAS_EXT(misa, 'F');  // Single-precision Float
+    int has_d = HAS_EXT(misa, 'D');  // Double-precision Float
+    int has_c = HAS_EXT(misa, 'C');  // Compressed
+
+    printf("--- Profile Compatibility ---\n");
+
+    // RVA22 需要: RV64IMAFDC + 更多
+    if (xlen == 64 && has_m && has_a && has_f && has_d && has_c) {
+        printf("[✓] RVA22 基本需求: PASS\n");
+        printf("    (需額外檢查: Zba, Zbb, Zbs, Sv39, PMP>=8)\n");
+    } else {
+        printf("[✗] RVA22 基本需求: FAIL\n");
+        if (xlen != 64) printf("    缺少: 64-bit base\n");
+        if (!has_m) printf("    缺少: M (Multiply)\n");
+        if (!has_a) printf("    缺少: A (Atomics)\n");
+        if (!has_f) printf("    缺少: F (Float)\n");
+        if (!has_d) printf("    缺少: D (Double)\n");
+        if (!has_c) printf("    缺少: C (Compressed)\n");
+    }
+
+    // RVM (Microcontroller) 相容性較寬鬆
+    if (has_m && has_c) {
+        printf("[✓] RVM 基本需求: PASS (RV32/64 + M + C)\n");
+    }
+}
+
+int main() {
+    uint64_t misa = read_misa();
+
+    if (misa == 0) {
+        printf("Error: Cannot read misa (not in M-mode?)\n");
+        return 1;
+    }
+
+    check_profile(misa);
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯 (需要 M-mode 執行環境)
+riscv64-unknown-elf-gcc -march=rv64gc -o profile_detect profile_detect.c
+
+# 在 Spike 執行 (M-mode 模擬)
+spike pk profile_detect
+```
+
+### 預期輸出 (QEMU virt machine)
+
+```text
+=== RISC-V Profile Detector ===
+
+Base: RV64
+Extensions: ACDFIMSU
+
+--- Profile Compatibility ---
+[✓] RVA22 基本需求: PASS
+    (需額外檢查: Zba, Zbb, Zbs, Sv39, PMP>=8)
+[✓] RVM 基本需求: PASS (RV32/64 + M + C)
+```
+
+### 觀察重點
+
+| Extension | misa 位元 | 用途 |
+|-----------|----------|------|
+| M | bit 12 | 整數乘除法 |
+| A | bit 0 | 原子操作 (Lock-free) |
+| F | bit 5 | 單精度浮點 |
+| D | bit 3 | 雙精度浮點 |
+| C | bit 2 | 壓縮指令 |
+| S | bit 18 | Supervisor Mode |
+
+> 💡 **注意**：`misa` 只顯示主要 Extension。Zba、Zbb 等子 Extension 需要透過其他方式檢測（如嘗試執行並捕捉 Illegal Instruction）。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：Profile 版本號 ≠ 效能
+
+**錯誤認知**：「RVA23 比 RVA22 快 10%」
+
+**真相**：Profile 版本只代表**功能集**的年份，不代表時脈或硬體效能。
+
+```text
+RVA22 @ 2.0 GHz 可能比 RVA23 @ 1.0 GHz 快很多！
+
+Profile 定義的是「軟體相容性」，不是「硬體效能」。
+```
+
+### 陷阱 2：以為 RV64G 就是 RVA22
+
+**錯誤情境**：看到廠商說支援 `RV64GC`，就以為可以跑最新的 Fedora。
+
+**真相**：RVA22 還需要額外的 Extension 和硬體特性：
+
+| 需求 | RV64GC | RVA22 |
+|------|--------|-------|
+| IMAFDCSU | ✓ | ✓ |
+| Zba, Zbb, Zbs | ✗ | ✓ (Mandatory) |
+| Sv39 (MMU) | 未規定 | ✓ (Mandatory) |
+| PMP ≥ 8 entries | 未規定 | ✓ (Mandatory) |
+
+### 陷阱 3：忽略 Profile 的向後相容性
+
+**錯誤情境**：為 RVA23 編譯的程式無法在 RVA22 硬體上執行。
+
+**正確理解**：
+
+```text
+RVA22 軟體 → RVA23 硬體  ✓ (向前相容)
+RVA23 軟體 → RVA22 硬體  ✗ (可能用到新指令)
+```
+
+> 💡 **建議**：如果需要最大相容性，編譯時指定較舊的 Profile 作為 target。
 
 ---
 

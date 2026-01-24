@@ -4,6 +4,55 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand VA to PA Translation**: Grasp how Virtual Addresses are converted to Physical Addresses via Page Tables
+2. **Master Sv39 Structure**: Understand the three-level Page Table hierarchy (L2 → L1 → L0)
+3. **Configure the `satp` CSR**: Calculate and set `satp` to enable the MMU
+4. **Understand TLB Mechanism**: Know how TLB accelerates address translation and when to flush it
+5. **Handle Page Faults**: Analyze the causes of Page Faults and understand the handling flow
+
+---
+
+## 💡 Scenario: The Library's Call Numbers
+
+> **Scene**: Junior is debugging a multi-process system, staring at GDB's memory display, increasingly puzzled.
+
+**Junior**: "Professor, I've encountered something really weird. I'm running two programs simultaneously, and when I look at their memory in GDB, both are using address `0x10000`! But the data inside is completely different. How is this possible? Is the CPU a quantum computer?"
+
+**Professor**: (laughing) "This isn't quantum entanglement. Have you ever been to a library?"
+
+**Junior**: "Sure, but what does a library have to do with this?"
+
+**Professor**: "Imagine this: You're at Library Branch A, and using call number `Q123`, you find a book called 'Introduction to Quantum Mechanics.' Your friend is at Branch B, uses the same call number `Q123`, and finds 'Calculus Exercise Collection.'"
+
+**Junior**: "Because each branch has its own shelf arrangement?"
+
+**Professor**: "Exactly!
+
+1. **Call Number (Virtual Address)**: The address the program sees, like a call number. Each program thinks it has an entire library to itself.
+2. **Actual Shelf Location (Physical Address)**: Where the book really is.
+3. **Catalog Index (Page Table)**: The lookup table that translates call numbers to actual shelf locations.
+4. **Branch (Process)**: Each branch has its own catalog index."
+
+**Junior**: "So two programs using the same virtual address, through different Page Tables, get translated to different physical addresses?"
+
+**Professor**: "You've got it! This is the essence of **Virtual Memory**. The operating system prepares a dedicated catalog (Page Table) for each process, making each think it has exclusive use of the entire library, when in reality everyone's books are crammed into the same warehouse. The benefits are:
+
+- **Isolation**: Program A messing up won't affect Program B.
+- **Protection**: Some shelves are marked 'Staff Only'—you can't touch them without permission.
+- **Flexibility**: Books can be relocated anytime—just update the catalog."
+
+**Junior**: "So what's the `satp` CSR for?"
+
+**Professor**: "`satp` tells the CPU: 'Use this particular catalog (Page Table), starting from this location.' When the OS switches processes, it updates `satp` to point to a different catalog."
+
+**Junior**: "Got it! Let's try building this catalog ourselves!"
+
+---
+
 Virtual memory is one of the most important abstractions in modern computing. It provides memory protection, isolating processes from each other and from the operating system. It provides address space abstraction, giving each process a simple, contiguous view of memory regardless of physical layout. It enables memory overcommitment, allowing systems to run more programs than would fit in physical RAM. And it supports shared memory, enabling efficient communication and resource sharing.
 
 RISC-V implements virtual memory through a clean, flexible paging system. Sv39 provides 39-bit virtual addresses (512 GB address space) with three-level page tables, suitable for most application processors. Sv48 extends this to 48-bit virtual addresses (256 TB address space) with four-level page tables for systems requiring larger address spaces. Both modes support superpages (2 MB and 1 GB pages) for reduced TLB pressure and efficient large mappings.
@@ -402,6 +451,191 @@ The OS can handle page faults in several ways:
 2. The process typically terminates with a segmentation fault
 
 The key is that `sepc` points to the faulting instruction, so returning from the trap re-executes it. This is essential for demand paging and copy-on-write to work correctly.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 5.1 — Putting on Magic Glasses (Enable Paging)
+
+This lab guides you through building the simplest Page Table: Identity Mapping (Virtual Address = Physical Address), and enabling the MMU.
+
+### Lab Objectives
+
+1. Understand Sv39's Page Table Entry (PTE) structure
+2. Build an Identity Mapping Page Table
+3. Configure the `satp` CSR and enable the MMU
+4. Understand the role of `sfence.vma`
+
+### Concept Explanation
+
+In Sv39 mode, the Page Table has three levels:
+
+```
+Virtual Address (39-bit):
++--------+--------+--------+------------+
+| VPN[2] | VPN[1] | VPN[0] |   Offset   |
+|  9-bit |  9-bit |  9-bit |   12-bit   |
++--------+--------+--------+------------+
+
+Page Table Walk:
+  satp.PPN → Level 2 Table → Level 1 Table → Level 0 Table → Physical Page
+```
+
+Each Page Table Entry (PTE) is 64-bit:
+
+```
+PTE Format:
++-----------------------------------------------+-------+
+|             PPN (44-bit)                      | Flags |
+|                                               | RWXUG |
++-----------------------------------------------+-------+
+  63                                    10  9       0
+
+Flags:
+  V (Valid)     - bit 0: Entry is valid
+  R (Read)      - bit 1: Readable
+  W (Write)     - bit 2: Writable
+  X (Execute)   - bit 3: Executable
+  U (User)      - bit 4: User mode accessible
+  G (Global)    - bit 5: Global mapping
+  A (Accessed)  - bit 6: Has been accessed
+  D (Dirty)     - bit 7: Has been written
+```
+
+### Code
+
+Create `lab5_paging.c`:
+
+```c
+// lab5_paging.c - Minimal Identity Mapping Demo
+#include <stdint.h>
+
+// PTE Flag Definitions
+#define PTE_V   (1 << 0)  // Valid
+#define PTE_R   (1 << 1)  // Read
+#define PTE_W   (1 << 2)  // Write
+#define PTE_X   (1 << 3)  // Execute
+#define PTE_U   (1 << 4)  // User
+#define PTE_A   (1 << 6)  // Accessed
+#define PTE_D   (1 << 7)  // Dirty
+
+// Sv39: 512 entries per page table (9-bit index)
+#define PAGE_SIZE     4096
+#define PTE_PER_PAGE  512
+
+// Page Table (must be 4KB aligned)
+__attribute__((aligned(PAGE_SIZE)))
+uint64_t root_page_table[PTE_PER_PAGE];
+
+// Simplified: We use 1GB Gigapages for Identity Mapping
+// VPN[2] = 0 → PA 0x0000_0000 ~ 0x3FFF_FFFF (1GB)
+// VPN[2] = 1 → PA 0x4000_0000 ~ 0x7FFF_FFFF (1GB)
+
+void setup_identity_mapping(void) {
+    // Clear Page Table
+    for (int i = 0; i < PTE_PER_PAGE; i++) {
+        root_page_table[i] = 0;
+    }
+
+    // Create Identity Mapping (first 4GB, using 1GB gigapages)
+    // This is a Leaf PTE: RWX bits are set, meaning this is the final mapping
+    for (int i = 0; i < 4; i++) {
+        uint64_t pa = (uint64_t)i << 30;  // Each entry maps 1GB
+        uint64_t ppn = pa >> 12;          // PPN = PA >> 12
+        root_page_table[i] = (ppn << 10) | PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
+    }
+}
+
+void enable_paging(void) {
+    uint64_t root_ppn = ((uint64_t)root_page_table) >> 12;
+
+    // satp format: MODE (4-bit) | ASID (16-bit) | PPN (44-bit)
+    // MODE = 8 (Sv39)
+    uint64_t satp_val = (8ULL << 60) | root_ppn;
+
+    // Set satp
+    asm volatile("csrw satp, %0" : : "r"(satp_val));
+
+    // Flush TLB - CRITICAL!
+    asm volatile("sfence.vma");
+}
+
+int main(void) {
+    setup_identity_mapping();
+    enable_paging();
+
+    // If we reach here, paging is working!
+    // The program continues to run because VA == PA
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile (for bare-metal S-mode)
+riscv64-unknown-elf-gcc -march=rv64gc -mabi=lp64d -nostdlib \
+    -T linker.ld -o lab5_paging lab5_paging.c startup.S
+
+# Run with QEMU
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel lab5_paging
+```
+
+### What You Just Did
+
+You've accomplished the fundamental MMU setup:
+
+1. **Built a Page Table**: Created entries that map VA to the same PA
+2. **Configured satp**: Told the CPU where the Page Table is and which mode to use
+3. **Flushed TLB**: Ensured the CPU uses the new mappings
+
+> **danieRTOS Reference**: The memory management in danieRTOS uses similar identity mapping for kernel space, with separate per-task mappings for user space.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Page Table Not Aligned
+
+**Error Scenario**: Page Table is not 4KB aligned, causing `satp` to compute an incorrect PPN.
+
+```c
+// ❌ Wrong: Not aligned
+uint64_t page_table[512];  // May not be 4KB aligned!
+
+// ✅ Correct: Force 4KB alignment
+__attribute__((aligned(4096)))
+uint64_t page_table[512];
+```
+
+### Pitfall 2: Forgetting to Flush TLB
+
+**Error Scenario**: Modified the Page Table but didn't execute `sfence.vma`, causing the CPU to continue using stale TLB cache.
+
+```c
+// ❌ Wrong: Forgot to flush after modification
+page_table[index] = new_pte;
+// CPU may still use old mapping!
+
+// ✅ Correct: Flush TLB after modification
+page_table[index] = new_pte;
+asm volatile("sfence.vma");  // Tell CPU: Page Table changed, clear cache
+```
+
+### Pitfall 3: Confusing Leaf PTE with Non-Leaf PTE
+
+**Error Scenario**: Setting RWX bits on an intermediate level, accidentally creating a gigapage mapping.
+
+```c
+// PTE type determination rules:
+// - RWX all 0: Non-Leaf (points to next level Page Table)
+// - RWX at least one is 1: Leaf (final mapping)
+
+// ❌ Wrong: Level 2 PTE has R bit set, becomes 1GB gigapage!
+level2_pte = (next_table_ppn << 10) | PTE_V | PTE_R;  // Accidentally becomes Leaf
+
+// ✅ Correct: Non-Leaf PTE only sets V bit
+level2_pte = (next_table_ppn << 10) | PTE_V;  // Correct Non-Leaf
+```
 
 ---
 

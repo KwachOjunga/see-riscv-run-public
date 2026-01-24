@@ -4,6 +4,45 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Master GDB Stub Usage**: Use QEMU `-s -S` to start a GDB Server for remote debugging
+2. **Know Core Debug Commands**: `break`, `si`, `info reg`, `x/`, and other GDB commands
+3. **Build a Debug Mindset**: Adopt a systematic "Observe → Hypothesize → Verify" debugging workflow
+
+---
+
+## 💡 Scenario: The Pocket Watch That Stops Time
+
+> **Scene**: Junior is pointing at garbled results on the screen, about to lose it.
+
+**Junior**: "I can't take this anymore. I just wanted to add 1 to 5, why is the result 34821? I've been staring at these five lines of Assembly for an hour!"
+
+**Senior**: "Looking with your eyes isn't enough. Junior, program execution is like a speeding train—how can you see if there's a crack in the wheels while sitting by the tracks?"
+
+**Junior**: "So what do I do? Add `printf`?"
+
+**Senior**: "`printf` is fine, but in bare-metal situations or when the program crashes, you can't even print anything. You need a 'pocket watch' that can pause time—**GDB**."
+
+**Junior**: "Pause time?"
+
+**Senior**: "Exactly. Through a **JTAG** hardware interface (or the QEMU emulator we're using now), we can force the CPU into **Debug Mode**.
+
+| Debug Mode Feature | Analogy |
+|-------------------|---------|
+| Check Registers | Peeking in a wallet |
+| View Memory | Searching through drawers |
+| Single Step | Slow-motion replay |
+| Breakpoint | Setting a trap |
+
+In this mode, the CPU is like someone pressed the pause button. We can execute just one instruction at a time and see where things went wrong.
+
+Come on, give me that broken program. Let's go bug hunting."
+
+---
+
 Software development requires debugging. A program crashes, and we need to know why. A function returns the wrong value, and we need to step through its execution. A performance bottleneck appears, and we need to trace instruction flow. Debugging transforms opaque failures into understandable problems.
 
 RISC-V provides a comprehensive debug architecture that supports both halting debug (stop the processor, examine state) and non-intrusive trace (record execution without stopping). The Debug Module allows external debuggers to control the processor through JTAG or other interfaces. Hardware breakpoints and triggers enable precise control over when to halt execution. Debug mode provides a special execution environment for debug operations. Trace support captures instruction and data flow for post-mortem analysis.
@@ -624,6 +663,169 @@ ARM:
 - Extensive tool support
 
 For embedded systems, SWD's 2-pin interface is attractive. For complex SoCs, both architectures provide comparable debug capabilities.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 15.1 — The Vanishing Values (Bug Hunting with GDB)
+
+This lab features a classic **Pointer Stride Error**—the most common mistake for RISC-V beginners: assuming an `int` pointer `+1` moves 4 bytes, but in Assembly `addi x, x, 1` really does add just 1 byte.
+
+### Lab Objectives
+
+1. Launch QEMU's GDB Server feature
+2. Connect GDB and load symbols
+3. Use `layout asm` to view assembly
+4. Find the two bugs in the program
+
+### Buggy Code (buggy_sum.S)
+
+```assembly
+.section .data
+# Define an array: 10, 20, 30, 40, 50
+# Expected result: 10+20+30+40+50 = 150 (Hex: 0x96)
+nums: .word 10, 20, 30, 40, 50
+
+.section .text
+.global _start
+
+_start:
+    la  t0, nums        # t0 points to array start
+    li  t1, 5           # t1 is loop counter (Count = 5)
+    # BUG 1: Forgot to initialize accumulator a0
+    # We assume a0 is 0, but it might be garbage
+
+loop:
+    lw  t2, 0(t0)       # Load current number into t2
+    add a0, a0, t2      # Accumulate: a0 = a0 + t2
+
+    # BUG 2: Pointer stride error!
+    # We're reading words (4 bytes), but here we only add 1
+    addi t0, t0, 1      # ❌ Should be addi t0, t0, 4
+
+    addi t1, t1, -1     # Decrement counter
+    bnez t1, loop       # If not done, continue loop
+
+stop:
+    j stop
+```
+
+### Debug Workflow
+
+**Step A: Compile (with debug info)**
+
+```bash
+# -g is key! Tells compiler to keep symbol table
+riscv64-unknown-elf-gcc -g -nostdlib -o buggy_sum.elf buggy_sum.S
+```
+
+**Step B: Start QEMU (as Target)**
+
+```bash
+# -S: Pause CPU immediately after startup
+# -s: Enable GDB Server, default Port 1234
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel buggy_sum.elf -S -s
+```
+
+*(Terminal will hang—open another terminal for GDB)*
+
+**Step C: Start GDB (as Host)**
+
+```bash
+riscv64-unknown-elf-gdb buggy_sum.elf
+```
+
+**Step D: GDB Interactive Investigation**
+
+```gdb
+(gdb) target remote :1234     # Connect to QEMU
+(gdb) layout asm              # Open Assembly view
+(gdb) break loop              # Set breakpoint at loop label
+(gdb) continue                # Run until breakpoint
+
+# After entering the loop...
+(gdb) info reg a0             # Observe accumulator → not 0!
+(gdb) info reg t0             # Observe pointer
+(gdb) si                      # Single Step one instruction
+(gdb) info reg t0             # Look at pointer again → only moved 1 byte!
+
+# After finding the problem...
+(gdb) x/5xw &nums             # View array memory contents
+```
+
+### Expected Findings
+
+1. **Bug 1 (a0 uninitialized)**: First time entering loop, `info reg a0` shows garbage value
+2. **Bug 2 (pointer stride)**: Each `addi t0, t0, 1` only increases t0 by 1, causing misaligned data reads
+
+### Fixed Code
+
+```assembly
+_start:
+    la  t0, nums
+    li  t1, 5
+    li  a0, 0           # ✅ FIX 1: Initialize accumulator
+
+loop:
+    lw  t2, 0(t0)
+    add a0, a0, t2
+    addi t0, t0, 4      # ✅ FIX 2: Stride = 4 bytes (word size)
+    addi t1, t1, -1
+    bnez t1, loop
+
+stop:
+    j stop
+```
+
+> **danieRTOS Reference**: The danieRTOS context switch code carefully uses word-aligned offsets when saving/restoring registers to the stack.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Compiler Optimization Interferes with Debugging
+
+**Error Scenario**: After compiling with `-O2`, line numbers in GDB don't match source code, variables "disappear".
+
+**Cause**: Optimizer reorders instructions, eliminates registers, inlines functions.
+
+```bash
+# ❌ Don't use high optimization when debugging
+riscv64-unknown-elf-gcc -O2 -o program.elf program.c
+
+# ✅ Use -O0 -g when debugging
+riscv64-unknown-elf-gcc -O0 -g -o program.elf program.c
+```
+
+### Pitfall 2: Forgetting the `-g` Flag
+
+**Error Scenario**: GDB shows "No symbol table is loaded".
+
+**Cause**: Compiled without `-g`, symbol info was discarded.
+
+```bash
+# ❌ No debug info
+riscv64-unknown-elf-gcc -o program.elf program.c
+
+# ✅ Keep debug info
+riscv64-unknown-elf-gcc -g -o program.elf program.c
+```
+
+### Pitfall 3: QEMU Not Paused with `-S`
+
+**Error Scenario**: Program already finished or crashed by the time GDB connects.
+
+**Solution**: Always add `-S` to make QEMU pause after startup, waiting for GDB.
+
+```bash
+# ❌ Program starts executing immediately after launch
+qemu-system-riscv64 -machine virt -kernel program.elf -s
+
+# ✅ Program pauses after launch, waiting for GDB
+qemu-system-riscv64 -machine virt -kernel program.elf -S -s
+```
+
+> 💡 **Tip**: `-s` = GDB Server on port 1234, `-S` = Stop at startup. These are often used together.
 
 ---
 

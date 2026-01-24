@@ -2,9 +2,11 @@
 
 **A Comprehensive Guide to RISC-V Architecture**
 
-**Author**: Danny Jiang
-**Version**: Draft v0p10
-**License**: CC BY 4.0 International
+[![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey)](https://creativecommons.org/licenses/by/4.0/)
+[![Version](https://img.shields.io/badge/Version-Draft%20v0p11-blue)]()
+[![Author](https://img.shields.io/badge/Author-Danny%20Jiang-orange)]()
+[![Updated](https://img.shields.io/badge/Updated-Jan%202026-green)]()
+
 **Language**: English | [繁體中文](README-zh-TW.md)
 
 ---
@@ -50,7 +52,9 @@
 
 **6 Appendices**: CSR Reference, Instruction Set Reference, Extension Reference, Glossary, Bibliography, About the Author
 
-**Total**: ~146,600 words (~500 pages)
+**Total**: ~160,000+ words (~550 pages)
+
+**New in v0p11**: Learning Objectives, Scenario Dialogues, Hands-on Labs, Common Pitfalls
 
 ---
 
@@ -61,7 +65,7 @@ All Markdown source files are available in this repository:
 - **English Version**: `manuscript/`
 - **Traditional Chinese Version**: `manuscript-zh-TW/`
 
-**Current Version**: Draft v0p10 - December 2025
+**Current Version**: Draft v0p11 - January 2026
 
 ---
 
@@ -126,5 +130,5 @@ This book is made possible by:
 
 ---
 
-**Last Updated**: December 2025
+**Last Updated**: January 2026
 

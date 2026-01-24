@@ -4,6 +4,68 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand Out-of-Order Execution**: Know why CPUs reorder memory accesses
+2. **Master RVWMO**: Understand the basic rules of RISC-V Weak Memory Ordering
+3. **Use Fence Instructions**: Know when to use `fence` to enforce ordering
+4. **Implement a Spinlock**: Use `amoswap` or `lr/sc` to build a mutex lock
+5. **Avoid Data Races**: Identify and fix race conditions in multi-core programs
+
+---
+
+## 💡 Scenario: Shipping Logic at the Distribution Center
+
+> **Scene**: Junior wrote a dual-core program where Core 0 writes data and Core 1 reads it, but the results are always scrambled.
+
+**Junior**: "Senior, I'm losing my mind! My program logic is correct, but the output looks like random numbers."
+
+**Senior**: "Show me the code."
+
+**Junior**: (showing screen)
+
+```c
+// Core 0                    // Core 1
+data = 42;                   while (flag == 0) {}
+flag = 1;                    print(data);  // Expected: 42
+```
+
+"By logic, Core 1 should wait until `flag` becomes 1 before printing `data`, and by then `data` should already be 42, right? But sometimes it prints 0!"
+
+**Senior**: "You're imagining the CPU as too honest. Modern CPUs are like distribution center managers—for efficiency, they'll 'secretly reorder shipments.'"
+
+**Junior**: "What do you mean?"
+
+**Senior**: "Imagine you're a logistics manager. You have two packages to ship:
+
+1. Package A: Ship to Taipei (far)
+2. Package B: Ship to Hsinchu (near)
+
+Which do you ship first?"
+
+**Junior**: "The Hsinchu one—it's faster anyway."
+
+**Senior**: "Bingo! The CPU thinks the same way. It sees `data = 42` and `flag = 1` as two stores. It notices `flag`'s address is already in cache while `data` has to wait for memory, so it writes `flag` first."
+
+**Junior**: "So Core 1 sees `flag == 1`, but `data` hasn't been written yet?"
+
+**Senior**: "Exactly. This is **Memory Reordering**. The fix is to use a **Fence** instruction to tell the CPU: 'No cutting in line! All preceding stores must complete before executing subsequent stores.'"
+
+```c
+// Core 0 (fixed version)
+data = 42;
+__sync_synchronize();  // Compiles to: fence iorw, iorw
+flag = 1;
+```
+
+**Junior**: "I see! What about `amoswap` and those atomic instructions?"
+
+**Senior**: "That's a different problem: 'How do you ensure two people don't enter the bathroom at the same time?' That's what Spinlock solves."
+
+---
+
 Modern processors execute instructions out of order, reorder memory accesses, and use caches that can delay when writes become visible to other processors. These optimizations are essential for performance, but they create a fundamental problem: what does a program actually mean when multiple processors access shared memory? Without careful synchronization, programs can observe impossible behaviors where effects appear to happen in the wrong order.
 
 RISC-V addresses this through a memory consistency model that defines which memory access orderings are legal, and synchronization primitives that enforce ordering when needed. The RISC-V Weak Memory Ordering (RVWMO) model allows aggressive reordering for performance while providing fence instructions and atomic operations to enforce ordering where required. Understanding memory ordering is essential for anyone writing concurrent code, implementing synchronization primitives, or optimizing multi-threaded applications.
@@ -685,6 +747,196 @@ Strategies:
 - Review synchronization code carefully
 
 The RISC-V memory model is formally specified, which allows using formal verification tools to prove correctness.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 6.1 — The Bathroom Battle (Spinlock)
+
+This lab guides you through implementing a Spinlock using the `amoswap` instruction to protect shared variables from concurrent access by multiple cores.
+
+### Lab Objectives
+
+1. Understand why naive read-modify-write operations cause Race Conditions
+2. Use `amoswap` (Atomic Memory Operation Swap) to implement a Spinlock
+3. Understand acquire/release semantics
+
+### Concept Explanation
+
+**Why Atomic Operations?**
+
+Consider this "naive" lock implementation:
+
+```c
+// ❌ Wrong lock implementation
+void lock_acquire(int *lock) {
+    while (*lock == 1) {}  // (1) Read: check if lock is held
+    *lock = 1;              // (2) Write: acquire lock
+}
+```
+
+Problem: Steps (1) and (2) are not atomic!
+
+```
+Time →
+Core 0: read lock=0 ──────────────────────── write lock=1
+Core 1: ────────────────── read lock=0 ───── write lock=1
+         ↑ Both cores think they acquired the lock!
+```
+
+**The Role of amoswap**
+
+`amoswap` combines "read old value" and "write new value" into one atomic operation:
+
+```assembly
+# amoswap.w.aq rd, rs2, (rs1)
+# Atomically executes:
+#   temp = memory[rs1]
+#   memory[rs1] = rs2
+#   rd = temp
+```
+
+### Code
+
+Create `lab6_spinlock.S`:
+
+```assembly
+# lab6_spinlock.S - Spinlock using amoswap
+.section .text
+.global spinlock_acquire
+.global spinlock_release
+
+# void spinlock_acquire(int *lock)
+# a0 = address of lock
+spinlock_acquire:
+    li t0, 1                    # t0 = 1 (LOCKED state)
+spin:
+    # amoswap.w.aq: Atomic swap with acquire semantics
+    # Atomically: old value → t1, new value 1 → memory[a0]
+    amoswap.w.aq t1, t0, (a0)
+
+    # Check if old value was 0 (UNLOCKED)
+    bnez t1, spin               # If old value wasn't 0, keep spinning
+
+    ret                         # Successfully acquired lock!
+
+# void spinlock_release(int *lock)
+# a0 = address of lock
+spinlock_release:
+    # amoswap.w.rl: Atomic swap with release semantics
+    # Write 0 (UNLOCKED) to lock
+    li t0, 0
+    amoswap.w.rl zero, t0, (a0)  # Discard result (write to zero)
+
+    ret
+```
+
+**C Driver Program** `main.c`:
+
+```c
+#include <stdio.h>
+
+extern void spinlock_acquire(int *lock);
+extern void spinlock_release(int *lock);
+
+int shared_counter = 0;
+int lock = 0;
+
+void increment_safely(void) {
+    spinlock_acquire(&lock);
+
+    // Critical Section: protected region
+    shared_counter++;
+
+    spinlock_release(&lock);
+}
+
+int main() {
+    // Simulate concurrent access
+    increment_safely();
+    increment_safely();
+    printf("Counter: %d\n", shared_counter);
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -o lab6_spinlock main.c lab6_spinlock.S
+
+# Run
+qemu-riscv64 lab6_spinlock
+```
+
+**Expected Output**:
+
+```
+Counter: 2
+```
+
+### What You Just Did
+
+You've implemented a correct spinlock:
+
+1. **Atomicity**: `amoswap` ensures read-and-write happens as one indivisible operation
+2. **Acquire Semantics**: `.aq` ensures subsequent operations in the critical section don't move before the lock acquisition
+3. **Release Semantics**: `.rl` ensures previous operations in the critical section don't move after the lock release
+
+> **danieRTOS Reference**: The scheduler in danieRTOS uses similar spinlocks to protect the task queue during context switches.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Confusing `volatile` with Memory Barriers
+
+**Error Scenario**: Thinking `volatile` solves multi-core synchronization.
+
+```c
+// ❌ Wrong: volatile only prevents compiler optimization, doesn't affect CPU reordering
+volatile int flag = 0;
+data = 42;
+flag = 1;  // CPU may still execute this first!
+
+// ✅ Correct: Need a memory barrier
+data = 42;
+__sync_synchronize();  // Or: asm volatile("fence rw, rw")
+flag = 1;
+```
+
+### Pitfall 2: Using Regular load/store in Spinlock
+
+**Error Scenario**: Not using atomic instructions, allowing two cores into the critical section.
+
+```c
+// ❌ Wrong: Non-atomic operations
+void bad_lock(int *lock) {
+    while (*lock) {}  // Read
+    *lock = 1;        // Write — can be interrupted between these!
+}
+
+// ✅ Correct: Use atomic operations
+void good_lock(int *lock) {
+    while (__sync_lock_test_and_set(lock, 1)) {}  // Compiles to amoswap
+}
+```
+
+### Pitfall 3: Forgetting acquire/release Semantics
+
+**Error Scenario**: Using atomic operations but without correct ordering.
+
+```assembly
+# ❌ Wrong: No .aq, critical section reads may be moved earlier
+amoswap.w t1, t0, (a0)      # No .aq
+
+# ❌ Wrong: No .rl, critical section writes may be delayed
+amoswap.w zero, t0, (a0)    # No .rl
+
+# ✅ Correct: acquire for lock, release for unlock
+amoswap.w.aq t1, t0, (a0)   # acquire
+amoswap.w.rl zero, t0, (a0) # release
+```
 
 ---
 

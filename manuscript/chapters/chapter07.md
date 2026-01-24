@@ -4,6 +4,66 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand the Pipeline Concept**: Know why pipelining improves throughput
+2. **Master the 5-Stage Pipeline**: Be familiar with the functions of IF, ID, EX, MEM, WB stages
+3. **Identify Hazard Types**: Distinguish between Structural, Data, and Control Hazards
+4. **Understand Solutions**: Grasp the principles of Stalling, Forwarding, and Branch Prediction
+5. **Analyze Pipeline Performance**: Calculate factors affecting CPI (Cycles Per Instruction)
+
+---
+
+## 💡 Scenario: The Wisdom of the Factory Assembly Line
+
+> **Scene**: Junior visits Architect's semiconductor factory, curious about how the production line works.
+
+**Junior**: "Architect, I've always had a question. Textbooks say a CPU executes one instruction per cycle, but I see each instruction goes through five steps—fetch, decode, execute, memory access, writeback. How can it possibly complete in one cycle?"
+
+**Architect**: "Great question. Come, let me show you the factory floor."
+
+(They walk to the production line)
+
+**Architect**: "Look at this assembly line. Each station does only one thing:
+
+1. **Station 1**: Get parts (Fetch)
+2. **Station 2**: Check specifications (Decode)
+3. **Station 3**: Assemble (Execute)
+4. **Station 4**: Quality inspection (Memory)
+5. **Station 5**: Package (Writeback)
+
+Each product goes through five stations to complete. If each station takes 1 minute, one product takes 5 minutes, right?"
+
+**Junior**: "Right."
+
+**Architect**: "But look—how many products are being processed simultaneously on the line right now?"
+
+**Junior**: "Five! There's one at each station."
+
+**Architect**: "Exactly. Although each product takes 5 minutes to complete, the line **outputs one finished product every minute**. This is the power of **Pipeline**—**Throughput** is one instruction per cycle, even though **Latency** for a single instruction is five cycles."
+
+**Junior**: "I see! What if one station gets stuck?"
+
+**Architect**: "That's a **Hazard**. Imagine the screwdriver at station 3 breaks—
+
+- **Structural Hazard**: Not enough tools—two products fighting for the same screwdriver.
+- **Data Hazard**: Station 3 needs a part from station 5, but that product isn't finished yet.
+- **Control Hazard**: A phone call says 'Stop! Switch to a different model!'—all half-finished products are scrapped."
+
+**Junior**: "How do you solve these?"
+
+**Architect**: "Three tricks:
+
+1. **Stall**: Stop the line and wait, but this reduces throughput.
+2. **Forwarding**: Station 3's result doesn't wait for station 5 to package—pass it directly from the side.
+3. **Prediction**: Guess what model the boss wants. If right, keep going. If wrong, tear it down and redo."
+
+**Junior**: "Got it! Let's see how the CPU handles these situations."
+
+---
+
 The pipeline is the heart of modern processor design. It's the mechanism that allows a processor to work on multiple instructions simultaneously, dramatically improving throughput. In this chapter, we'll explore how RISC-V processors implement pipelining, from the classic five-stage pipeline to advanced techniques for handling hazards and branches.
 
 Understanding pipelines is crucial for anyone working with RISC-V, whether you're designing hardware, writing compilers, or optimizing performance-critical code. The beauty of RISC-V's design is that its clean, regular instruction set makes it particularly well-suited for efficient pipeline implementation. We'll examine the classic five-stage pipeline (Fetch, Decode, Execute, Memory, Writeback), the three types of hazards that disrupt pipeline flow (structural, data, control), and techniques for handling them (forwarding, stalling, branch prediction). We'll also explore how pipeline depth affects performance and complexity.
@@ -641,6 +701,150 @@ Superscalar processors are more complex but can achieve higher IPC (Instructions
 - **Shallow pipelines** (fewer stages) have lower misprediction penalties and simpler control, but lower maximum frequency.
 
 Modern processors balance these trade-offs. RISC-V cores range from 3-stage pipelines (simple embedded cores) to 10+ stage pipelines (high-performance cores).
+
+---
+
+## 🛠️ Hands-on Lab: Lab 7.1 — Pipeline Bubble Analysis
+
+This lab is a pencil-and-paper exercise that guides you through analyzing Pipeline Hazards in real assembly code and drawing Pipeline Diagrams.
+
+### Lab Objectives
+
+1. Identify Data Hazards in code
+2. Draw Pipeline Timing Diagrams
+3. Calculate Stall Cycles and actual CPI
+4. Understand how Forwarding reduces Stalls
+
+### Analysis Example
+
+Consider the following RISC-V assembly:
+
+```assembly
+    lw   x1, 0(x2)      # I1: Load x1 from memory
+    add  x3, x1, x4     # I2: x3 = x1 + x4 (depends on I1's result)
+    sub  x5, x3, x6     # I3: x5 = x3 - x6 (depends on I2's result)
+    and  x7, x5, x8     # I4: x7 = x5 & x8 (depends on I3's result)
+```
+
+### Exercise 1: Pipeline Without Forwarding
+
+Assume no Forwarding—results must be written back in WB before the next instruction can read them in ID.
+
+**Draw the Pipeline Diagram**:
+
+```
+Cycle:   1    2    3    4    5    6    7    8    9   10   11   12
+I1 (lw): IF   ID   EX   MEM  WB
+I2 (add):     IF   ID   --   --   --   ID   EX   MEM  WB
+                   ↑ stall 3 cycles (waiting for x1 ready)
+I3 (sub):               IF   --   --   --   IF   ID   --   --   ...
+I4 (and):                                        IF   ID   ...
+```
+
+**Calculation**:
+- Ideal case: 4 instructions × 1 cycle = 4 cycles
+- Actual case: Multiple stalls due to Hazards
+- Real CPI > 1
+
+### Exercise 2: Pipeline With Forwarding
+
+With Forwarding, results from EX or MEM stages can be "forwarded" directly to the next instruction.
+
+**Think About**:
+
+1. When is `lw`'s result earliest available? (Hint: end of MEM stage)
+2. When does `add` need `x1`'s value? (Hint: start of EX stage)
+3. Even with Forwarding, does `lw` followed by `add` still need a stall?
+
+<details>
+<summary>Click to see answer</summary>
+
+1. `lw`'s result is available at **end of MEM stage** (memory read completes)
+2. `add` needs `x1`'s value at **start of EX stage**
+3. **Yes, 1 cycle stall needed!** Because `lw` has result at MEM end, but `add` needs it at EX start—this is called **Load-Use Hazard**
+
+```
+Cycle:   1    2    3    4    5    6    7    8
+I1 (lw): IF   ID   EX   MEM  WB
+I2 (add):     IF   ID   --   EX   MEM  WB
+                   ↑ 1 cycle stall (Load-Use Hazard)
+I3 (sub):          IF   --   ID   EX   MEM  WB
+                        ↑ forwarding from I2.EX → I3.EX
+I4 (and):               IF   ID   EX   MEM  WB
+                             ↑ forwarding from I3.EX → I4.EX
+```
+
+</details>
+
+### Extended Exercise: Code Scheduling
+
+Compilers can reduce stalls by reordering instructions. Try reordering this code:
+
+```assembly
+# Original code (has Load-Use Hazard)
+lw   x1, 0(x2)
+add  x3, x1, x4     # depends on x1, must stall
+lw   x5, 4(x2)
+add  x6, x5, x7     # depends on x5, must stall
+
+# Optimized code (interleave independent instructions)
+lw   x1, 0(x2)
+lw   x5, 4(x2)      # independent, can execute during x1's MEM
+add  x3, x1, x4     # x1 now ready (forwarded from MEM)
+add  x6, x5, x7     # x5 now ready
+```
+
+> **danieRTOS Reference**: Understanding pipeline behavior helps optimize context switch code, where minimizing stalls in the critical path improves task switching latency.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Confusing Throughput and Latency
+
+**Misconception**: "5-stage pipeline means each instruction takes 5 cycles?"
+
+**Correct Understanding**:
+- **Latency**: A single instruction from IF to WB indeed takes 5 cycles
+- **Throughput**: In steady state, 1 instruction completes per cycle
+- More stages increase clock frequency but also increase Hazard penalty
+
+### Pitfall 2: Thinking Forwarding Solves All Data Hazards
+
+**Misconception**: "With Forwarding, we never need to stall!"
+
+**Correct Understanding**:
+- **Load-Use Hazard** cannot be fully solved by Forwarding
+- Load result is produced in MEM stage, but next instruction needs it in EX stage
+- Must insert at least 1 cycle stall (bubble)
+
+```
+lw   x1, 0(x2)      # Result available at cycle 4 (MEM)
+add  x3, x1, x4     # Needs value at cycle 3 (EX) — too late!
+                    # Must stall 1 cycle
+```
+
+### Pitfall 3: Ignoring Control Hazard Cost
+
+**Misconception**: "A branch instruction is just a jump."
+
+**Correct Understanding**:
+- Branch target is determined in EX stage (comparison operation)
+- IF and ID stages have already fetched "wrong" subsequent instructions
+- If branch taken, these instructions must be **flushed**
+- This is called **Branch Penalty**
+
+```
+    beq  x1, x2, target   # cycle 1: IF
+    add  x3, x4, x5       # cycle 2: IF (guessed not taken)
+    sub  x6, x7, x8       # cycle 3: IF
+                          # cycle 3: discover branch taken!
+                          # add, sub must be flushed, wasting 2 cycles
+```
+
+**Solution**: **Branch Prediction**
+- Static Prediction: Guess backward branch taken, forward not taken
+- Dynamic Prediction: Predict based on history (Branch History Table)
 
 ---
 

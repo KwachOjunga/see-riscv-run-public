@@ -4,6 +4,47 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 PMP 的作用**：掌握 Physical Memory Protection 如何在硬體層級限制存取權限
+2. **區分 TOR 與 NAPOT**：明白兩種 Address Matching Mode 的配置差異與適用場景
+3. **配置 PMP Entry**：能夠設定唯讀區域並攔截非法寫入
+4. **理解 PLIC 架構**：掌握 Platform-Level Interrupt Controller 的運作原理
+5. **整合 SoC 元件**：理解 CPU、Memory、Peripheral 如何透過 Interconnect 連接
+
+---
+
+## 💡 情境引入：博物館的紅龍柱
+
+> **場景**：小華看著螢幕上的 "Store Access Fault" 異常代碼，一臉困惑。
+
+**小華**：「王工，這太奇怪了。我明明已經把 MMU (虛擬記憶體) 關掉了，直接用物理地址去寫這個變數，為什麼 CPU 還是攔截我？是不是板子壞了？」
+
+**王工**：「板子沒壞，是你撞到了 **PMP (Physical Memory Protection)** 的『紅龍柱』。
+
+想像一下，記憶體是一座博物館：
+
+| 機制 | 比喻 | 功能 |
+|-----|------|------|
+| **MMU (Page Table)** | 導覽地圖 | 告訴你展品在哪裡 (VA → PA) |
+| **PMP** | 紅龍柱 + 防彈玻璃 | 硬體保全，限制誰能碰什麼 |
+
+就算你繞過了導覽員（關掉 MMU），直接衝到蒙娜麗莎畫像前，硬體保全（PMP Checker）還是會把你擋下來，因為你的身分證（Privilege Mode）只是普通遊客（S-mode/U-mode），而這區只有館長（M-mode）能碰。」
+
+**小華**：「那要怎麼設這些紅龍柱？要設起始地址和結束地址嗎？」
+
+**王工**：「有兩種常見圍法：
+
+1. **TOR (Top of Range)**：像是拉一條長繩子。你需要兩根柱子（兩個 PMP Entry），繩子中間的區域就是管轄範圍。適合任意大小的區域。
+
+2. **NAPOT (Naturally Aligned Power of Two)**：像是用一個固定大小的罩子（4KB, 2MB...）罩住展品。只需要設定中心點和罩子大小，比較省資源（只用一個 Entry）。
+
+今天我們來試試用 NAPOT 罩住一塊 4KB 的區域，把它變成『唯讀』，看看你的程式會發生什麼事。」
+
+---
+
 RISC-V processor core 不會單獨運作。要構建完整的 system-on-chip (SoC)，core 必須與 memory controller、interrupt controller、I/O device 和 system interconnect 整合。這種整合決定了 software 如何存取 hardware、device 如何通訊，以及系統如何維護 security 和 performance。
 
 RISC-V 提供 modular approach 來進行 SoC design。與規定特定 peripheral implementation 的 monolithic architecture 不同，RISC-V 定義 standard interface，同時允許 implementation 的靈活性。Physical Memory Protection (PMP) unit 控制 machine mode 中的 memory access。Platform-Level Interrupt Controller (PLIC) 將 interrupt 從 device 路由到 core。Memory-mapped I/O (MMIO) 提供統一的 device access 機制。System interconnect（如 TileLink 和 AXI）將 component 連接在一起。
@@ -671,6 +712,209 @@ dma_start_sg(device, sg_list, 2);
 1. **IOMMU**：將 device address 轉換為 physical address（見 Section 13.2）
 
 2. **Physically contiguous buffer**：從 reserved physical memory 分配 DMA buffer
+
+---
+
+## 🛠️ 實作練習：Lab 13.1 — 記憶體防火牆 (PMP Shield)
+
+這個 Lab 將展示 PMP 的核心功能：在 M-mode 設定保護規則，然後切換到 S-mode 嘗試違規存取。
+
+### 實驗目標
+
+1. 配置 PMP Entry 0 為 **Read-Only (R=1, W=0)**，保護目標變數
+2. 配置 PMP Entry 1 為 **Allow-All (R=1, W=1, X=1)**，讓其他程式碼正常執行
+3. 切換到 S-mode 嘗試寫入，觸發 Store Access Fault
+
+### NAPOT 編碼原理
+
+NAPOT 的編碼對初學者很抽象，關鍵公式是：
+
+```text
+pmpaddr = (base_addr >> 2) | ((size >> 3) - 1)
+
+範例：保護 0x80200000 開始的 4KB 區域
+- Base = 0x80200000, Size = 4KB (0x1000)
+- 0x80200000 >> 2 = 0x20080000
+- (0x1000 >> 3) - 1 = 0x1FF
+- pmpaddr = 0x20080000 | 0x1FF = 0x200801FF
+```
+
+**編碼規則**：
+
+| pmpaddr 低位元 | 對應區域大小 |
+|--------------|------------|
+| `...aaaaa0` | 8 bytes |
+| `...aaaa01` | 16 bytes |
+| `...aaa011` | 32 bytes |
+| `...a01111` | 128 bytes |
+| `...0111111111` | 4KB (我們用的) |
+
+### 程式碼 (pmp_lab.S)
+
+```assembly
+.section .text
+.global _start
+
+_start:
+    # ---------------------------------------------------
+    # 1. 準備 Trap Handler (捕捉稍後的 Access Fault)
+    # ---------------------------------------------------
+    la t0, trap_handler
+    csrw mtvec, t0
+
+    # ---------------------------------------------------
+    # 2. 設定 PMP (在 M-mode 下進行)
+    # ---------------------------------------------------
+
+    # [目標] 保護位於 0x80200000 的 4KB 區域
+    # 使用 NAPOT 模式
+    li t0, 0x200801FF
+    csrw pmpaddr0, t0
+
+    # Entry 0: Enable + NAPOT + Read Only (R=1, W=0, X=0)
+    # PMP_R(1) | PMP_A_NAPOT(0x18) = 0x19
+
+    # Entry 1: 開放其他記憶體 (Allow All)
+    # pmpaddr1 設成全 1 (最大地址)，模式設為 TOR
+    # PMP_R(1) | PMP_W(1) | PMP_X(1) | PMP_A_TOR(0x08) = 0x0F
+
+    # pmpcfg0 = (pmp1cfg << 8) | pmp0cfg = 0x0F19
+    li t0, -1
+    csrw pmpaddr1, t0
+
+    li t0, 0x0F19
+    csrw pmpcfg0, t0        # 防火牆啟動！
+
+    # ---------------------------------------------------
+    # 3. 降級到 S-mode
+    # ---------------------------------------------------
+
+    # 設定 mstatus.MPP = 01 (Supervisor)
+    li t0, (3 << 11)
+    csrc mstatus, t0        # 清除 MPP
+    li t0, (1 << 11)
+    csrs mstatus, t0        # 設定 MPP 為 01 (S-mode)
+
+    la t0, s_mode_entry
+    csrw mepc, t0
+    mret                    # 跳轉！身分變成 Supervisor
+
+s_mode_entry:
+    # ---------------------------------------------------
+    # 4. 觸發攻擊 (S-mode Attempt)
+    # ---------------------------------------------------
+    li a0, 0x80200000       # PMP0 保護的地址
+    li t1, 0xDEADBEEF
+
+    # 嘗試寫入！應該觸發 Exception 7 (Store Access Fault)
+    sw t1, 0(a0)
+
+    # 如果沒死，代表實驗失敗
+    li a0, 0
+    j stop
+
+stop:
+    j stop
+
+# ---------------------------------------------------
+# Trap Handler (M-mode)
+# ---------------------------------------------------
+.align 4
+trap_handler:
+    csrr t0, mcause
+    li t1, 7                # Store Access Fault
+    beq t0, t1, success
+    j stop
+
+success:
+    # 實驗成功！攔截到非法寫入
+    # 跳過 sw 指令，避免無限迴圈
+    csrr t0, mepc
+    addi t0, t0, 4
+    csrw mepc, t0
+
+    li a0, 1                # Return 1 (Success)
+    mret
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -nostdlib -o pmp_lab.elf pmp_lab.S
+
+# 執行 (QEMU virt machine 支援 PMP)
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel pmp_lab.elf -d int 2>&1 | head -20
+```
+
+### 預期行為
+
+1. CPU 從 M-mode 啟動
+2. 設定 PMP 規則後降級到 S-mode
+3. S-mode 嘗試寫入保護區域
+4. 硬體觸發 Store Access Fault (mcause = 7)
+5. Trap Handler 捕捉到異常，實驗成功
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：PMP 優先級順序錯誤
+
+**錯誤情境**：把「拒絕規則」放在 pmp15，把「允許規則」放在 pmp0。
+
+**後果**：pmp0 先匹配，所有存取都被允許，後面的拒絕規則永遠不會生效。
+
+```c
+// ❌ 錯誤：順序顛倒
+pmp0: Allow All (RWX)      // 先匹配，放行一切
+pmp1: Deny 0x80200000      // 永遠不會被檢查到
+
+// ✅ 正確：先寫特定 Deny，最後寫通用 Allow
+pmp0: Read-Only 0x80200000 // 先檢查敏感區域
+pmp1: Allow All            // 其他區域放行
+```
+
+> 💡 **記憶法**：像防火牆規則，**先寫例外，最後寫預設**。
+
+### 陷阱 2：忘記 Default Deny 規則
+
+**錯誤情境**：只設定一個 PMP Entry 保護金鑰區，忘記開放其他記憶體。
+
+**後果**：程式碼區域沒有被任何 PMP Entry 匹配，S/U-mode 連下一行指令都抓不到。
+
+```assembly
+# ❌ 錯誤：只有一個 Entry
+csrw pmpaddr0, t0       # 保護金鑰
+csrw pmpcfg0, 0x19      # Read-Only
+mret                    # 跳到 S-mode 後立刻 Crash！
+
+# ✅ 正確：加上 Allow All Entry
+csrw pmpaddr0, t0       # 保護金鑰
+csrw pmpaddr1, t1       # Max address
+csrw pmpcfg0, 0x0F19    # pmp0=RO, pmp1=RWX
+```
+
+### 陷阱 3：Lock Bit 的不可逆性
+
+**錯誤情境**：在開發階段就設定 Lock bit (L=1)。
+
+**後果**：PMP Entry 被鎖定，只有硬體 Reset 才能解除。Debug 時無法修改規則。
+
+```c
+// ❌ 危險：開發時設定 Lock
+pmpcfg0 = 0x99;  // L=1, A=NAPOT, R=1
+
+// ✅ 建議：只在生產環境 (Production) 才設定 Lock
+#ifdef PRODUCTION
+    pmpcfg0 = 0x99;  // 鎖定
+#else
+    pmpcfg0 = 0x19;  // 開發模式，不鎖定
+#endif
+```
+
+> 💡 **提醒**：Lock bit 是為了防止 M-mode Firmware 被惡意修改。在開發階段請勿使用。
 
 ---
 

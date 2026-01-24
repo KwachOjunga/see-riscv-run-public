@@ -4,6 +4,160 @@
 
 ---
 
+> 💡 **使用指南**：本附錄是 S-mode 呼叫 M-mode 服務的「API 手冊」。當你忘記 a7 是 EID 還是 FID 時，翻到這裡。
+
+---
+
+## 🎯 SBI Calling Convention 圖解
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    S-mode (Kernel/OS)                           │
+│                                                                 │
+│    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐             │
+│    │   a7    │ │   a6    │ │ a0-a5   │ │  ecall  │             │
+│    │  EID    │ │  FID    │ │  Args   │ │ ──────► │             │
+│    └─────────┘ └─────────┘ └─────────┘ └─────────┘             │
+│       │           │           │                                 │
+├───────┼───────────┼───────────┼─────────────────────────────────┤
+│       ▼           ▼           ▼                                 │
+│    ┌─────────────────────────────────────────┐                 │
+│    │         Trap to M-mode (OpenSBI)        │                 │
+│    └─────────────────────────────────────────┘                 │
+│       │                                                         │
+│       ▼                                                         │
+│    ┌─────────┐ ┌─────────┐                                     │
+│    │   a0    │ │   a1    │                                     │
+│    │ Error   │ │ Value   │                                     │
+│    │  Code   │ │(Return) │                                     │
+│    └─────────┘ └─────────┘                                     │
+│                                                                 │
+│                    M-mode (OpenSBI Firmware)                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**記憶口訣**：`a7 = EID (哪個 Extension)`, `a6 = FID (哪個 Function)`
+
+---
+
+## 📋 常用 EID 速查表
+
+| EID (Hex) | EID (ASCII) | 名稱 | 用途 | 常用 FID |
+|-----------|-------------|------|------|----------|
+| `0x10` | — | **Base** | 查詢 SBI 版本/廠商 | 0=版本, 3=探測 Extension |
+| `0x54494D45` | "TIME" | **Timer** | 設定 Timer 中斷 | 0=set_timer |
+| `0x735049` | "sPI" | **IPI** | 跨核心中斷 | 0=send_ipi |
+| `0x52464E43` | "RFNC" | **RFENCE** | 遠端 TLB 刷新 | 0-6 (各種 fence) |
+| `0x4442434E` | "DBCN" | **Debug Console** | 除錯輸出 | 0=write, 1=read |
+| `0x48534D` | "HSM" | **Hart State Mgmt** | 啟動/停止 Hart | 0=start, 1=stop |
+
+---
+
+## 🛠️ 常用 SBI Wrapper (Copy-Paste Ready)
+
+### sbi_call 通用介面
+
+```c
+struct sbiret {
+    long error;
+    long value;
+};
+
+static inline struct sbiret sbi_call(long eid, long fid,
+    long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    struct sbiret ret;
+    register long r_a0 asm("a0") = a0;
+    register long r_a1 asm("a1") = a1;
+    register long r_a2 asm("a2") = a2;
+    register long r_a3 asm("a3") = a3;
+    register long r_a4 asm("a4") = a4;
+    register long r_a5 asm("a5") = a5;
+    register long r_a6 asm("a6") = fid;
+    register long r_a7 asm("a7") = eid;
+
+    asm volatile("ecall"
+        : "+r"(r_a0), "+r"(r_a1)
+        : "r"(r_a2), "r"(r_a3), "r"(r_a4), "r"(r_a5), "r"(r_a6), "r"(r_a7)
+        : "memory");
+
+    ret.error = r_a0;
+    ret.value = r_a1;
+    return ret;
+}
+```
+
+### 常用功能 Wrapper
+
+```c
+// 1. 設定 Timer 中斷 (最常用!)
+static inline void sbi_set_timer(uint64_t stime_value) {
+    sbi_call(0x54494D45, 0, stime_value, 0, 0, 0, 0, 0);
+}
+
+// 2. 輸出一個字元 (Debug Console)
+static inline void sbi_debug_console_write_byte(char c) {
+    sbi_call(0x4442434E, 2, c, 0, 0, 0, 0, 0);
+}
+
+// 3. 查詢 SBI 版本
+static inline long sbi_get_spec_version(void) {
+    struct sbiret ret = sbi_call(0x10, 0, 0, 0, 0, 0, 0, 0);
+    return ret.value;
+}
+
+// 4. 探測是否支援某 Extension
+static inline long sbi_probe_extension(long eid) {
+    struct sbiret ret = sbi_call(0x10, 3, eid, 0, 0, 0, 0, 0);
+    return ret.value;  // 0 = 不支援, 非 0 = 支援
+}
+```
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：EID 和 FID 順序搞混
+
+**症狀**：SBI 呼叫返回 `SBI_ERR_NOT_SUPPORTED`。
+
+**原因**：a7 和 a6 放反了。
+
+```c
+// ❌ 錯誤：EID 和 FID 放反
+register long a6 asm("a6") = 0x10;        // 應該是 FID
+register long a7 asm("a7") = 0;           // 應該是 EID
+
+// ✅ 正確：a7=EID, a6=FID
+register long a6 asm("a6") = 0;           // FID = 0 (get_spec_version)
+register long a7 asm("a7") = 0x10;        // EID = 0x10 (Base Extension)
+```
+
+### 陷阱 2：忘記檢查返回的錯誤碼
+
+**症狀**：SBI 呼叫失敗但程式繼續執行，導致後續錯誤難以追蹤。
+
+```c
+// ❌ 錯誤：忽略錯誤碼
+sbi_set_timer(next_time);
+
+// ✅ 正確：檢查錯誤
+struct sbiret ret = sbi_call(0x54494D45, 0, next_time, 0, 0, 0, 0, 0);
+if (ret.error != 0) {
+    panic("sbi_set_timer failed: %ld", ret.error);
+}
+```
+
+### 陷阱 3：在 M-mode 呼叫 SBI
+
+**症狀**：程式當機或進入無限迴圈。
+
+**原因**：SBI 是給 S-mode 呼叫的。在 M-mode 呼叫 ecall 會 Trap 回 M-mode 自己。
+
+**解決**：在 M-mode 直接操作 CSR，不要透過 SBI。
+
+---
+
 本附錄提供 RISC-V SBI（Supervisor Binary Interface）call 的完整參考。SBI 定義了 supervisor mode（S-mode）software 和 machine mode（M-mode）firmware 之間的標準介面，使 operating system 能夠在不同的 RISC-V platform 上移植。
 
 ---

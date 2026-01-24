@@ -4,6 +4,59 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **解讀 ISA 命名**：能夠解析 RV64GC、RV32IM 等 ISA 字串的含義
+2. **理解 G 組合包**：明白 G = IMAFD 的定義與歷史背景
+3. **掌握 Z/X 擴充邏輯**：理解新式 Extension 的命名規則
+4. **比較軟硬體實作**：了解硬體指令 vs 軟體模擬的效能差異
+5. **檢測 Extension 存在**：能夠透過 `misa` CSR 查詢 CPU 支援的功能
+
+---
+
+## 💡 情境引入：技能樹與 DLC
+
+> **場景**：小華在閱讀 Linux Kernel 的編譯選項時，被一長串 ISA 字串嚇到了。
+
+**小華**：「杰哥，這行 `MARCH` 變數是在寫 Wi-Fi 密碼嗎？`RV64IMAFDC_Zicsr`...這誰看得懂啊？」
+
+**阿杰**：（笑）「這可是 RISC-V 的身分證。別怕，我們把它當作 RPG 遊戲的角色屬性來看，拆開就很簡單。」
+
+**小華**：「RPG 屬性？」
+
+**阿杰**：「你看頭兩個字 **RV64**，這代表它是 64 位元的角色，能拿雙手大劍（64-bit 暫存器）。如果是 RV32 就是 32 位元。」
+
+**小華**：「這我懂，那後面那串英文字母呢？」
+
+**阿杰**：「那是它『學會的技能』，每個字母代表一種能力：
+
+| 字母 | 名稱 | 比喻 | 功能 |
+|-----|------|------|------|
+| **I** | Integer | 基本功 | 加減法和邏輯運算，必備技能 |
+| **M** | Multiply | 乘法技 | 硬體乘除法，沒它就得連做 N 次加法 |
+| **A** | Atomic | 鎖定技 | 原子操作，Spinlock 的基礎 |
+| **F** | Float | 單精度魔法 | 32-bit 浮點數運算 |
+| **D** | Double | 雙精度魔法 | 64-bit 浮點數運算 |
+| **C** | Compressed | 縮骨功 | 16-bit 壓縮指令，省空間 |
+
+」
+
+**小華**：「原來如此。那大家常說的 **RV64GC** 又是什麼？這裡面沒有 G 啊？」
+
+**阿杰**：「**G (General)** 是一個『超值套餐』。因為 IMAFD 這五個太常用了，所以官方定義 **G = I + M + A + F + D**。所以 `RV64GC` 其實就是 `RV64IMAFDC` 的縮寫，這是現在跑 Linux 的基本門檻。」
+
+**小華**：「懂了！那最後那個 **Z** 開頭的又是什麼？隱藏版技能？」
+
+**阿杰**：「差不多。因為 26 個英文字母快不夠用了，所以後來的新功能（或是從 I 裡面拆出來的功能）都用 **Z** 開頭加上名字。這就像是遊戲的 **DLC 資料片**。
+
+比如 `Zicsr` 代表它支援 CSR 操作，`Zifencei` 代表支援指令屏障。這串密碼其實就是告訴編譯器：『這顆 CPU 有買這些 DLC，你可以盡量用這些指令』！」
+
+**小華**：「哈！原來只是技能列表啊，這樣看就清楚多了！」
+
+---
+
 RISC-V 的 modular design 是其最顯著的特點之一。與將所有功能捆綁在一起的 monolithic instruction set architecture 不同，RISC-V 將功能分離為 minimal base ISA 加上 optional extension。這種方法允許 implementation 只包含它們需要的 feature，從 tiny microcontroller 到 high-performance server。
 
 Base integer ISA（RV32I 或 RV64I）提供足夠的 instruction 來運行完整的 operating system 和 application — 總共 47 條 instruction。但大多數實際系統需要更多：multiplication 和 division、用於 synchronization 的 atomic operation、floating-point arithmetic，以及用於 code density 的 compressed instruction。這些能力來自 standard extension，每個由單個字母識別。
@@ -657,6 +710,193 @@ Embedded system 存在單獨的 profile：
 - Real-time profile：添加 deterministic interrupt handling 的 requirement
 
 這些 profile 確保 embedded software 可以針對 well-defined platform。
+
+---
+
+## 🛠️ 實作練習：Lab 11.1 — 硬體加速的威力 (Soft vs Hard Mul)
+
+這個 Lab 將透過編譯器選項，讓你親身體會「有 M Extension」與「沒有 M Extension」的效能差異。
+
+### 實驗目標
+
+1. 使用相同的 C 程式碼（乘法運算）
+2. 分別編譯成 **RV64I** (無乘法指令) 與 **RV64IM** (有乘法指令)
+3. 觀察 Assembly 差異
+4. 比較執行週期
+
+### 程式碼
+
+建立 `mul_test.c`：
+
+```c
+// mul_test.c - 比較軟體與硬體乘法
+#include <stdint.h>
+
+// 讀取 cycle 計數器
+static inline uint64_t read_cycles(void) {
+    uint64_t val;
+    asm volatile("csrr %0, mcycle" : "=r"(val));
+    return val;
+}
+
+// 簡單的乘法函數
+long multiply(long a, long b) {
+    return a * b;
+}
+
+// 多次乘法測試
+volatile long result;
+void bench_multiply(int iterations) {
+    long a = 123456;
+    long b = 789012;
+    for (int i = 0; i < iterations; i++) {
+        result = multiply(a, b);
+        a++;
+    }
+}
+
+int main(void) {
+    int iterations = 10000;
+
+    uint64_t start = read_cycles();
+    bench_multiply(iterations);
+    uint64_t end = read_cycles();
+
+    // 簡單輸出 (假設有 putchar)
+    // cycles = end - start
+    return 0;
+}
+```
+
+### 實驗步驟
+
+**步驟 A：編譯為 RV64IM (有乘法指令)**
+
+```bash
+# 告訴編譯器可以使用乘法指令 (mul, mulw 等)
+riscv64-unknown-elf-gcc -O2 -march=rv64im -mabi=lp64 \
+    -c mul_test.c -o mul_hard.o
+
+# 查看 Assembly
+riscv64-unknown-elf-objdump -d mul_hard.o
+```
+
+**觀察 Assembly**：
+
+```assembly
+multiply:
+    mul     a0, a0, a1    # 直接硬體乘法，1 個 cycle
+    ret
+```
+
+**步驟 B：編譯為 RV64I (無乘法指令)**
+
+```bash
+# 告訴編譯器「這顆 CPU 不懂乘法」
+riscv64-unknown-elf-gcc -O2 -march=rv64i -mabi=lp64 \
+    -c mul_test.c -o mul_soft.o
+
+# 查看 Assembly
+riscv64-unknown-elf-objdump -d mul_soft.o
+```
+
+**觀察 Assembly**：
+
+```assembly
+multiply:
+    call    __muldi3      # 呼叫軟體模擬函式庫 (libgcc)
+```
+
+### 分析
+
+`__muldi3` 是 libgcc 提供的軟體乘法實作，內部由數十行 `add`、`shift`、`branch` 組成：
+
+```assembly
+# __muldi3 的簡化邏輯 (Shift-and-Add 演算法)
+__muldi3:
+    li      t0, 0           # result = 0
+loop:
+    andi    t1, a1, 1       # 檢查 b 的最低位
+    beqz    t1, skip
+    add     t0, t0, a0      # result += a
+skip:
+    slli    a0, a0, 1       # a <<= 1
+    srli    a1, a1, 1       # b >>= 1
+    bnez    a1, loop
+    mv      a0, t0
+    ret
+```
+
+**效能對比**：
+
+| 指標 | RV64IM (硬體) | RV64I (軟體) |
+|-----|--------------|-------------|
+| 指令數 | 1 | ~64 (取決於數值) |
+| Cycles | 1-5 | 50-200 |
+| 效能差異 | 基準 | **慢 10-50 倍** |
+
+### 延伸思考
+
+> 💭 **為什麼 M Extension 不是必選？**
+>
+> 在極度資源受限的嵌入式系統（如 8-bit 相容的微控制器），晶片設計者可能選擇不實作乘法器以節省電晶體。這時編譯器會自動使用軟體模擬。RISC-V 的模組化讓這種取捨成為可能。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：誤解 G 的組成
+
+**錯誤認知**：「RV64G 包含壓縮指令 (C)」
+
+**正確理解**：
+
+- **G = IMAFD**，不包含 C
+- **GC = IMAFD + C**
+- Linux 通常要求 **RV64GC**，因為大部分發行版預設使用 C extension 節省空間
+
+```bash
+# ❌ 錯誤：以為 G 包含 C
+riscv64-linux-gnu-gcc -march=rv64g  # 實際上沒有 C
+
+# ✅ 正確：明確指定 GC
+riscv64-linux-gnu-gcc -march=rv64gc
+```
+
+### 陷阱 2：misa 檢測的陷阱
+
+**錯誤情境**：在 S-mode 或 U-mode 讀取 `misa`。
+
+**後果**：發生 Illegal Instruction Exception，因為 `misa` 是 M-mode CSR。
+
+```c
+// ❌ 錯誤：在 S-mode 直接讀 misa
+unsigned long misa;
+asm volatile("csrr %0, misa" : "=r"(misa));  // Exception!
+
+// ✅ 正確：透過 SBI 或使用 Device Tree 獲取資訊
+// 或者使用 try-catch 機制嘗試執行特定指令
+```
+
+### 陷阱 3：忽略 Zicsr 和 Zifencei
+
+**錯誤情境**：新版規範中，CSR 操作和 FENCE.I 已從 I 中分離。
+
+**後果**：使用舊的 `-march=rv64i` 可能會遇到問題。
+
+```bash
+# 舊版 (2019 前)
+# CSR 操作是 I 的一部分
+
+# 新版 (2019 後)
+# CSR 操作需要明確指定 Zicsr
+riscv64-unknown-elf-gcc -march=rv64i_zicsr_zifencei ...
+
+# 簡化方式：使用 G (它隱含了 Zicsr 和 Zifencei)
+riscv64-unknown-elf-gcc -march=rv64gc ...
+```
+
+> 💡 **提示**：在實務中，建議使用 `rv64gc` 或 `rv64imac` 這樣的標準組合，避免遺漏必要的 Extension。
 
 ---
 

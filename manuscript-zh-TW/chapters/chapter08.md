@@ -4,6 +4,50 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **區分 In-Order 與 Out-of-Order**：理解兩種執行模式的效能差異與適用場景
+2. **理解 Register Renaming**：明白如何透過 Physical Register 消除 False Dependency (WAW/WAR)
+3. **掌握 ROB 機制**：理解 Reorder Buffer 如何保證「亂序執行、順序提交」
+4. **認識 Speculative Execution**：了解預測執行的原理與安全風險 (Spectre/Meltdown)
+5. **使用效能計數器**：能夠透過 `mcycle` 和 `minstret` 計算 CPI
+
+---
+
+## 💡 情境引入：米其林餐廳的廚房哲學
+
+> **場景**：小華在比較兩款 RISC-V 核心的跑分結果，發現頻率差不多，但效能差了兩倍。
+
+**小華**：「陳教授，我看了兩款 RISC-V 核心的規格。SiFive U74 和阿里巴巴 C910，時脈都差不多是 1.5GHz，但 CoreMark 跑分差了快兩倍！這怎麼可能？」
+
+**陳教授**：「你有去過米其林餐廳嗎？」
+
+**小華**：「有啊，但這跟 CPU 有什麼關係？」
+
+**陳教授**：「想像兩間餐廳。
+
+**第一間（In-Order）**：廚師嚴格按照點單順序做菜。如果第一道菜需要等食材解凍 10 分鐘，後面所有菜都得等著，即使第二道菜的食材早就準備好了。
+
+**第二間（Out-of-Order）**：廚師會看哪道菜的食材先準備好，就先做哪道。等食材解凍的時候，他已經把其他三道菜都做完了。」
+
+**小華**：「所以 Out-of-Order 就是讓 CPU 不要傻等？」
+
+**陳教授**：「沒錯。但這需要一個聰明的『餐廳經理』來協調：
+
+1. **Reservation Station（備餐區）**：記錄每道菜需要什麼食材，食材到了就開始做。
+2. **Reorder Buffer（出菜順序表）**：雖然做菜順序亂了，但出菜還是要按客人點的順序，不然會搞混。
+3. **Register Renaming（食材標籤）**：如果兩道菜都需要『雞蛋』，但其實是不同的雞蛋，就貼上不同標籤避免搞混。」
+
+**小華**：「聽起來很複雜，代價是什麼？」
+
+**陳教授**：「電晶體數量暴增，功耗也跟著上去。這就是為什麼手機的『大核心』耗電，『小核心』省電——大核心通常是 Out-of-Order，小核心是 In-Order。」
+
+**小華**：「那我們來量量看實際的效能差異吧！」
+
+---
+
 在 Chapter 7 中，我們探討了經典的 five-stage in-order pipeline。但現代處理器遠遠超越了這個簡單的模型。Out-of-order (OOO) execution 允許處理器動態重新排序指令以提取更多 parallelism，大幅提高效能。In-order processor 按程式順序執行指令並在 dependency 上 stall，而 out-of-order processor 可以在等待慢速操作完成時執行獨立的指令。
 
 本章探討實現高效能 RISC-V 處理器的 microarchitectural 技術：register renaming 以消除 false dependency、reorder buffer 以維持 precise exception、speculative execution 以在 branch 之外執行、以及 advanced branch prediction 以最小化 misprediction penalty。我們將檢視隱藏 memory latency 的 cache hierarchy，以及維持多個 core 之間一致性的 cache coherence protocol。理解這些技術對於任何設計高效能 RISC-V 系統或為現代處理器最佳化 code 的人都至關重要。
@@ -622,6 +666,211 @@ R10000 開創了許多今天仍在使用的技術。現代 RISC-V OOO core（如
 - 簡單的 control-dominated code
 
 RISC-V 的靈活性允許 in-order（Rocket、SiFive E/U-series）和 OOO（BOOM、SiFive P-series）implementation，使其適用於廣泛的應用。
+
+---
+
+## 🛠️ 實作練習：Lab 8.1 — 效能計數器的真相 (Perf Counters)
+
+這個 Lab 將帶你使用 RISC-V 的硬體效能計數器，測量同一段程式在不同情況下的 CPI (Cycles Per Instruction)。
+
+### 實驗目標
+
+1. 讀取 `mcycle` (Machine Cycle Counter) 和 `minstret` (Machine Instructions Retired)
+2. 計算 CPI = Cycles / Instructions
+3. 觀察不同程式碼模式對 CPI 的影響
+
+### 概念說明
+
+RISC-V 提供兩個關鍵的效能計數器 CSR：
+
+| CSR | 名稱 | 說明 |
+|-----|------|------|
+| `mcycle` | Machine Cycle Counter | 從 reset 開始經過的時脈週期數 |
+| `minstret` | Machine Instructions Retired | 從 reset 開始完成的指令數 |
+
+**CPI (Cycles Per Instruction)** = mcycle / minstret
+
+- CPI = 1.0：理想情況，每個 cycle 完成一條指令
+- CPI > 1.0：有 stall（cache miss、hazard 等）
+- CPI < 1.0：超純量 (Superscalar) 處理器，每個 cycle 完成多條指令
+
+### 程式碼
+
+建立 `lab8_perf.c`：
+
+```c
+// lab8_perf.c - 效能計數器測量
+#include <stdio.h>
+#include <stdint.h>
+
+// 讀取 mcycle
+static inline uint64_t read_mcycle(void) {
+    uint64_t val;
+    asm volatile("csrr %0, mcycle" : "=r"(val));
+    return val;
+}
+
+// 讀取 minstret
+static inline uint64_t read_minstret(void) {
+    uint64_t val;
+    asm volatile("csrr %0, minstret" : "=r"(val));
+    return val;
+}
+
+// 測試函數 1：簡單的加法迴圈（無依賴）
+volatile int result1;
+void test_independent(int n) {
+    int a = 0, b = 0, c = 0, d = 0;
+    for (int i = 0; i < n; i++) {
+        a += 1;
+        b += 2;
+        c += 3;
+        d += 4;
+    }
+    result1 = a + b + c + d;
+}
+
+// 測試函數 2：有依賴的加法迴圈
+volatile int result2;
+void test_dependent(int n) {
+    int a = 0;
+    for (int i = 0; i < n; i++) {
+        a += 1;
+        a += a;  // 依賴前一行的結果
+        a += a;  // 依賴前一行的結果
+        a += a;  // 依賴前一行的結果
+    }
+    result2 = a;
+}
+
+void measure(const char *name, void (*func)(int), int n) {
+    uint64_t cycle_start = read_mcycle();
+    uint64_t instr_start = read_minstret();
+
+    func(n);
+
+    uint64_t cycle_end = read_mcycle();
+    uint64_t instr_end = read_minstret();
+
+    uint64_t cycles = cycle_end - cycle_start;
+    uint64_t instrs = instr_end - instr_start;
+
+    // 計算 CPI (乘以 100 避免浮點數)
+    uint64_t cpi_x100 = (cycles * 100) / instrs;
+
+    printf("%s:\n", name);
+    printf("  Cycles: %lu\n", cycles);
+    printf("  Instructions: %lu\n", instrs);
+    printf("  CPI: %lu.%02lu\n", cpi_x100 / 100, cpi_x100 % 100);
+}
+
+int main() {
+    int n = 100000;
+
+    printf("=== Performance Counter Lab ===\n\n");
+
+    measure("Independent Operations", test_independent, n);
+    printf("\n");
+    measure("Dependent Operations", test_dependent, n);
+
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -O1 -o lab8_perf lab8_perf.c
+
+# 執行 (需要 M-mode 權限讀取 mcycle/minstret)
+# 使用 Spike + PK
+spike pk lab8_perf
+
+# 或使用 QEMU (可能需要特殊配置)
+qemu-riscv64 lab8_perf
+```
+
+### 預期觀察
+
+你應該會看到類似這樣的結果：
+
+```text
+=== Performance Counter Lab ===
+
+Independent Operations:
+  Cycles: 1200000
+  Instructions: 1000000
+  CPI: 1.20
+
+Dependent Operations:
+  Cycles: 2500000
+  Instructions: 1000000
+  CPI: 2.50
+```
+
+**分析**：
+- **Independent Operations**：四個變數互不依賴，Out-of-Order 處理器可以並行執行，CPI 接近 1
+- **Dependent Operations**：每一行都依賴前一行的結果，必須等待，CPI 較高
+
+### 延伸思考
+
+> 💭 **為什麼 In-Order 處理器在這兩個測試中的 CPI 差異較小？**
+>
+> 因為 In-Order 處理器本來就按順序執行，無法利用 Independent Operations 的並行性。兩種情況的 CPI 都會比較高。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：以為 Out-of-Order 萬能
+
+**錯誤認知**：「OoO 處理器一定比 In-Order 快！」
+
+**正確理解**：
+- OoO 在 **Branch Misprediction** 時懲罰更重（需要 flush 更多指令）
+- OoO 在 **功耗受限** 的場景（如手機、IoT）可能不是最佳選擇
+- 對於 **高度並行** 的 workload（如 GPU-like），簡單的 In-Order 核心反而更有效率
+
+### 陷阱 2：忽略 Spectre/Meltdown 風險
+
+**錯誤認知**：「Speculative Execution 只是效能優化，沒有副作用。」
+
+**正確理解**：
+- Spectre 和 Meltdown 攻擊利用了 Speculative Execution 的 **側通道效應**
+- 即使預測錯誤的指令被取消，它們對 **Cache** 的影響仍然存在
+- 攻擊者可以透過測量 Cache 存取時間來推斷秘密資料
+
+```c
+// Spectre 攻擊的簡化概念
+if (x < array1_size) {           // 邊界檢查
+    y = array2[array1[x] * 256]; // 如果 x 越界，這行不該執行
+}
+// 但 Speculative Execution 可能會「先執行再說」
+// 即使後來發現 x 越界而取消，array2 的 cache 狀態已經洩漏了 array1[x] 的值
+```
+
+### 陷阱 3：混淆 mcycle 與 time
+
+**錯誤情境**：用 `mcycle` 來測量「真實時間」。
+
+**正確理解**：
+- `mcycle`：CPU 時脈週期數，與 CPU 頻率相關
+- `time`：真實時間（通常來自 RTC 或 Timer）
+- 如果 CPU 頻率會動態調整（DVFS），`mcycle` 不能直接換算成時間
+
+```c
+// ❌ 錯誤：假設 mcycle 等於時間
+uint64_t start = read_mcycle();
+do_something();
+uint64_t elapsed_ns = (read_mcycle() - start) * 1000000000 / CPU_FREQ;
+// 如果 CPU 頻率變了，這個計算就錯了
+
+// ✅ 正確：使用 time CSR 或 SBI timer
+uint64_t start = read_time();
+do_something();
+uint64_t elapsed_ns = (read_time() - start) * 1000000000 / TIMER_FREQ;
+```
 
 ---
 

@@ -4,6 +4,42 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 Reset Vector**：掌握 RISC-V 上電後第一條指令的位置
+2. **掌握 Boot 流程**：明白從 BootROM → Loader → Firmware → OS 的接力過程
+3. **撰寫 Linker Script**：能夠定義程式的記憶體佈局
+4. **實作 Bare-metal 程式**：能夠不依賴 OS，直接控制硬體
+5. **理解 UART MMIO**：能夠透過 Memory Mapped I/O 輸出字元
+
+---
+
+## 💡 情境引入：接力賽的第一棒
+
+> **場景**：小華按下開發板的 Reset 鍵，看著終端機上跑出一堆 Log。
+
+**小華**：「王工，我們寫 C 語言都是從 `main()` 開始。可是 CPU 剛通電的時候，RAM 裡應該是空的吧？那 CPU 第一行指令到底去哪裡抓？」
+
+**王工**：「問得好。這就像一場接力賽，`main()` 其實已經是第三或第四棒了。
+
+1. **第一棒 (Reset Vector)**：CPU 硬體被設計成通電後，PC (Program Counter) 會自動指向一個固定的地方（通常是 ROM）。在那裡，有一小段固化的程式碼（BootROM）。
+
+2. **第二棒 (Loader)**：BootROM 的任務很簡單，把儲存裝置（Flash/SD卡）裡的下一段程式（如 OpenSBI 或 U-Boot）搬到 RAM 裡，然後跳過去執行。
+
+3. **第三棒 (Firmware/OS)**：這時候環境比較舒服了，有 RAM 可以用，我們才開始準備跑你的 `main()`。」
+
+**小華**：「那我們能不能不要那些複雜的 OS，直接當那個『接力賽的第二棒』，自己控制硬體？」
+
+**王工**：「當然可以，這就是所謂的 **Bare-metal（裸機開發）**。在這世界裡，沒有 `printf`，沒有 `malloc`，甚至連 Stack 都要你自己設。我們現在就來試試看，在這個『荒野』裡發出第一聲吶喊。」
+
+**小華**：「聽起來很刺激！」
+
+**王工**：「但有一個關鍵：在進入 C 語言之前，你必須先設好 Stack Pointer (SP)。C 語言的函數呼叫依賴 Stack，沒設 SP 就跳進 C 會直接 crash。」
+
+---
+
 當你打開 RISC-V 系統的電源時會發生什麼？與在準備好的環境中運行的應用程式不同，boot process 從零開始 — 沒有 operating system、沒有 memory initialization、甚至沒有 stack。本章探討 RISC-V 系統如何從 power-on reset 自我啟動到運行的 operating system。
 
 Boot process 是一個精心編排的 firmware stage 序列，每個階段都為下一個階段準備環境。我們將追蹤這個旅程，從 reset vector 經過 machine-mode firmware（ZSBL、FSBL、OpenSBI）、bootloader（U-Boot、GRUB），最後到 operating system handoff。理解這個過程對於 firmware developer、system integrator 以及任何 debug boot issue 的人都至關重要。
@@ -690,6 +726,221 @@ start_kernel() (init/main.c)
 - Built-in secure/non-secure separation
 
 **RISC-V 的哲學**：Keep M-mode minimal，push complexity 到 S-mode。ARM 的哲學：Rich firmware layer with extensive security feature。
+
+---
+
+## 🛠️ 實作練習：Lab 9.2 — 荒野求生 (Bare-metal Hello World)
+
+這是你編程生涯中最「純粹」的一次體驗。我們將剝除所有作業系統的保護，直接與硬體對話。
+
+### 實驗目標
+
+1. 撰寫 Linker Script 定義記憶體佈局
+2. 撰寫 Assembly 啟動碼設定 Stack Pointer
+3. 使用 MMIO 直接控制 UART 輸出
+4. 在 QEMU 上執行
+
+### 專案結構
+
+建立一個資料夾 `lab9`，包含以下三個檔案：
+
+```text
+lab9/
+├── link.ld    # 地圖：定義記憶體佈局
+├── entry.S    # 啟動鑰匙：設定 SP 並跳轉到 main
+└── main.c     # 邏輯大腦：UART 驅動程式
+```
+
+### 程式碼
+
+**檔案 1: `link.ld` (Linker Script)**
+
+告訴 Linker：我們的程式要放在 RAM 的開頭 (`0x80000000`)。
+
+```ld
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
+
+SECTIONS
+{
+  /* QEMU virt machine 的 RAM 起始地址是 0x80000000 */
+  . = 0x80000000;
+
+  /* 程式碼段：把啟動代碼放在最前面 */
+  .text : {
+    *(.text.boot)
+    *(.text)
+  }
+
+  /* 數據段 */
+  .data : { *(.data) }
+
+  /* 未初始化數據段 (BSS) */
+  .bss : { *(.bss) }
+
+  /* 定義 Stack Top，預留 4KB 的空間 */
+  . = . + 0x1000;
+  _stack_top = .;
+}
+```
+
+**檔案 2: `entry.S` (Startup Code)**
+
+這是 CPU 執行的第一段代碼。
+
+```assembly
+.section .text.boot
+.global _start
+
+_start:
+    # 1. 關閉中斷 (好習慣，雖然剛開機通常是關的)
+    csrw mie, zero
+
+    # 2. 設定 Stack Pointer (SP)
+    #    C 語言的函數呼叫依賴 Stack，沒設 SP 就跳進 C 會 crash
+    la sp, _stack_top
+
+    # 3. 跳轉到 C 語言的 main 函數
+    call main
+
+    # 4. 如果 main 返回了 (理論上不該發生)，就停在這裡
+loop:
+    j loop
+```
+
+**檔案 3: `main.c` (UART Driver)**
+
+QEMU `virt` machine 的 UART0 地址固定在 `0x10000000`。
+
+```c
+#include <stdint.h>
+
+// QEMU virt 的 UART 基地址
+#define UART0_BASE 0x10000000
+
+// 定義一個指標指向該地址
+// volatile 很重要！告訴編譯器不要優化這個變數的讀寫
+volatile uint8_t *uart0 = (uint8_t *)(UART0_BASE);
+
+void put_char(char c) {
+    // 直接把字元寫入記憶體地址
+    // UART 控制器會把它發送出去
+    *uart0 = c;
+}
+
+void print_str(const char *s) {
+    while (*s) {
+        put_char(*s++);
+    }
+}
+
+int main() {
+    print_str("Hello, RISC-V Bare Metal World!\n");
+
+    // 永遠不返回
+    while (1) {}
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 1. 編譯：不使用標準函式庫 (-nostdlib)，不使用預設啟動檔 (-nostartfiles)
+riscv64-unknown-elf-gcc -march=rv64g -mabi=lp64 -mcmodel=medany \
+    -nostdlib -nostartfiles -T link.ld \
+    -o kernel.elf entry.S main.c
+
+# 2. 執行 (QEMU)
+# -machine virt: 使用 QEMU 的虛擬開發板
+# -bios none: 不使用預設的 OpenSBI
+# -kernel kernel.elf: 載入我們的程式
+# -nographic: 在終端機顯示輸出
+qemu-system-riscv64 -machine virt -bios none -kernel kernel.elf -nographic
+```
+
+### 預期輸出
+
+```text
+Hello, RISC-V Bare Metal World!
+```
+
+*(按 `Ctrl+A` 然後按 `X` 退出 QEMU)*
+
+### 深入解析：Memory Map
+
+為什麼是 `0x10000000` 和 `0x80000000`？這就是 QEMU virt machine 的 Memory Map：
+
+| 地址範圍 | 用途 |
+|---------|------|
+| `0x0000_1000` | BootROM (Reset Vector) |
+| `0x1000_0000` | UART (我們在這裡寫字) |
+| `0x8000_0000` | DRAM (程式跑在這裡) |
+
+這就是 **MMIO (Memory Mapped I/O)** 的魔力：對 CPU 來說，它只是在寫記憶體，但對系統來說，這是在控制周邊設備。
+
+### 延伸挑戰
+
+> 💭 **嘗試讓程式印出 "Booting..." 後，做一個簡單的計數再印出 "Done!"**
+>
+> 這會讓你體會到沒有 `sleep()` 函數的世界有多「原始」。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：Stack Pointer 遺忘症
+
+**錯誤情境**：直接從 Assembly 跳到 C 語言的 `main()`，忘記設定 `sp`。
+
+**後果**：程式一進入 C 函數就崩潰，因為 C 語言需要 Stack 來存放區域變數和返回地址。
+
+```assembly
+# ❌ 錯誤：忘記設定 SP
+_start:
+    call main    # 直接跳進 C，sp 是亂的，必死無疑
+
+# ✅ 正確：先設定 SP
+_start:
+    la sp, _stack_top
+    call main
+```
+
+### 陷阱 2：Linker Script 順序錯誤
+
+**錯誤情境**：沒有把 `.text.boot` 放在最前面。
+
+**後果**：CPU 從 `0x80000000` 開始執行，但那裡不是 `_start`，而是其他函數的代碼，導致不可預期的行為。
+
+```ld
+/* ❌ 錯誤：.text.boot 沒有在最前面 */
+.text : {
+    *(.text)       /* 其他代碼先進來了 */
+    *(.text.boot)  /* _start 被擠到後面 */
+}
+
+/* ✅ 正確：確保 .text.boot 在最前面 */
+.text : {
+    *(.text.boot)  /* 啟動代碼放第一個 */
+    *(.text)
+}
+```
+
+### 陷阱 3：UART 地址硬編碼
+
+**錯誤情境**：在程式中硬編碼 `0x10000000`，然後拿去別的開發板跑。
+
+**後果**：不同的硬體有不同的 Memory Map，UART 地址可能完全不同。
+
+```c
+// ❌ 問題：硬編碼地址，不可移植
+#define UART0_BASE 0x10000000
+
+// ✅ 更好的做法：透過 Device Tree 或 Header 定義
+// 或者使用 SBI (下一章會學到)
+```
+
+> 💡 **提示**：這就是為什麼我們需要 **SBI (Supervisor Binary Interface)**——它提供了一個標準化的介面，讓你不用關心底層硬體的差異。下一章，我們將學習如何透過 SBI 來輸出字元，而不是直接操作 UART。
 
 ---
 

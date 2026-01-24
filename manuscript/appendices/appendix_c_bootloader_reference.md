@@ -4,6 +4,157 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "boot disk" for starting projects. When you need to write bare-metal code from scratch, copy templates directly from here.
+
+---
+
+## 🚀 Minimal Viable Boot Template (Copy-Paste Ready)
+
+### Minimal Linker Script (`link.ld`)
+
+This is the most frequently copy-pasted file in bare-metal projects:
+
+```ld
+/* link.ld - For QEMU virt machine */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M
+}
+
+SECTIONS {
+    . = 0x80000000;
+
+    .text : {
+        *(.text.boot)       /* Ensure boot code comes first */
+        *(.text .text.*)
+    } > RAM
+
+    .rodata : {
+        *(.rodata .rodata.*)
+    } > RAM
+
+    .data : {
+        *(.data .data.*)
+    } > RAM
+
+    .bss : {
+        _bss_start = .;
+        *(.bss .bss.*)
+        *(COMMON)
+        _bss_end = .;
+    } > RAM
+
+    . = ALIGN(16);
+    . = . + 0x4000;         /* Reserve 16KB Stack */
+    _stack_top = .;
+}
+```
+
+### Minimal Entry Point (`entry.S`)
+
+```assembly
+# entry.S - Minimal boot code
+.section .text.boot
+.global _start
+
+_start:
+    # 1. Set Stack Pointer
+    la sp, _stack_top
+
+    # 2. Clear BSS section
+    la t0, _bss_start
+    la t1, _bss_end
+clear_bss:
+    bge t0, t1, bss_done
+    sd zero, 0(t0)
+    addi t0, t0, 8
+    j clear_bss
+bss_done:
+
+    # 3. Jump to C main
+    call main
+
+    # 4. Halt after main returns
+halt:
+    wfi
+    j halt
+```
+
+### Minimal Main (`main.c`)
+
+```c
+// main.c - Minimal Hello World (UART)
+#define UART_BASE 0x10000000  // QEMU virt UART address
+
+void uart_putc(char c) {
+    volatile char *uart = (volatile char *)UART_BASE;
+    *uart = c;
+}
+
+void uart_puts(const char *s) {
+    while (*s) uart_putc(*s++);
+}
+
+int main(void) {
+    uart_puts("Hello, RISC-V!\n");
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -nostdlib -T link.ld \
+    -o hello.elf entry.S main.c
+
+# Run
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel hello.elf
+```
+
+---
+
+## 📊 Typical Boot Flow Diagram
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                     Power-On Reset                          │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ZSBL (Zeroth-Stage Bootloader) - ROM                       │
+│  • PC = Reset Vector (0x1000 or implementation-defined)     │
+│  • Initialize clock, DRAM Controller                        │
+│  • Jump to FSBL                                             │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  FSBL (First-Stage Bootloader) - Flash/ROM                  │
+│  • Initialize SPI/SD storage device                         │
+│  • Load OpenSBI to DRAM                                     │
+│  • Jump to OpenSBI                                          │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  OpenSBI (M-mode Firmware)                                  │
+│  • Set up PMP to protect M-mode memory                      │
+│  • Initialize SBI services                                  │
+│  • Set medeleg/mideleg to delegate traps                    │
+│  • Jump to S-mode Kernel                                    │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Linux Kernel (S-mode)                                      │
+│  • Initialize virtual memory                                │
+│  • Start init process                                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 This appendix provides a reference implementation of a minimal RISC-V bootloader. This code demonstrates the essential steps required to boot a RISC-V system from reset to loading an operating system. While production bootloaders like U-Boot are much more complex, this example illustrates the core concepts.
 
 ---

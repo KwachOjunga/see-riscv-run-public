@@ -4,6 +4,42 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Distinguish Exception from Interrupt**: Understand the fundamental difference between synchronous and asynchronous traps
+2. **Master the Trap Handling Flow**: Understand the roles of `mtvec`, `mepc`, `mcause`, and `mtval`
+3. **Write a Trap Handler**: Implement a basic exception handler
+4. **Understand Trap Delegation**: Know how M-mode delegates traps to S-mode
+5. **Recognize PLIC**: Understand the basic architecture of the Platform-Level Interrupt Controller
+
+---
+
+## 💡 Scenario: When the CPU Hits the Pause Button
+
+> **Scene**: Junior stares at a completely black terminal screen, looking bewildered.
+
+**Junior**: "Senior, I have a question. I deliberately stuffed some garbage data `.word 0xFFFFFFFF` into my program, and it just crashed. But in Linux, if a program goes bad, usually only that program gets killed (Segmentation Fault), and the system stays fine, right?"
+
+**Senior**: "That's because Linux has a powerful 'emergency response center'—the **Trap Handler**. But in our bare-metal environment right now, you haven't written a handler. When the CPU encounters an instruction it doesn't understand, it doesn't know what to do, so it just... gives up."
+
+**Junior**: "So I need to write this response center myself?"
+
+**Senior**: "Exactly. Think of it this way:
+
+1. **Trap Occurs**: Like a robotic arm on the assembly line suddenly shows a red warning light and stops.
+2. **Hardware Action**: The CPU automatically saves the current progress (PC) in `mepc` (Machine Exception PC), then jumps to wherever `mtvec` (Trap Vector) points to for help.
+3. **Software Takes Over (Handler)**: This is the code you need to write. You check `mcause` (Machine Cause) to see what triggered the alarm, handle the problem, then let the machine continue."
+
+**Junior**: "Sounds logical—handle it and go back to what you were doing?"
+
+**Senior**: "Here's the trap within the trap. If it's an 'Interrupt' (like a timer going off), you handle it and return to 'what you were doing.' But if it's an 'Illegal Instruction Exception,' returning to 'what you were doing' just hits the same illegal instruction again—infinite loop! So you have to manually 'skip over' that bad instruction."
+
+**Junior**: "I see! Let's try it then."
+
+---
+
 When a program encounters an error, receives an interrupt, or makes a system call, control must transfer from the current execution context to a handler that can deal with the event. RISC-V calls this mechanism a "trap"—a general term encompassing both synchronous exceptions (like page faults and illegal instructions) and asynchronous interrupts (like timer ticks and device signals).
 
 Understanding traps is fundamental to system programming. Operating systems rely on traps to implement system calls, handle errors, and respond to hardware events. Firmware uses traps to manage low-level hardware and provide services to higher-level software. Even application programmers benefit from understanding how exceptions propagate and how interrupt latency affects real-time performance.
@@ -482,6 +518,78 @@ This allows:
 
 Example: Set threshold to 5 to mask all interrupts with priority ≤ 5.
 
+**PLIC Memory Map and Programming**
+
+The PLIC is configured through memory-mapped registers:
+
+```
+Base Address: 0x0C000000 (typical, platform-specific)
+
+Priority registers:     Base + 0x000000 + source_id * 4
+Pending registers:      Base + 0x001000 + (source_id / 32) * 4
+Enable registers:       Base + 0x002000 + context * 0x80 + (source_id / 32) * 4
+Threshold registers:    Base + 0x200000 + context * 0x1000
+Claim/Complete:         Base + 0x200004 + context * 0x1000
+```
+
+A "context" is a (hart, privilege mode) pair. For a system with M-mode and S-mode per hart:
+
+- Context 0 = Hart 0, M-mode
+- Context 1 = Hart 0, S-mode
+- Context 2 = Hart 1, M-mode
+- Context 3 = Hart 1, S-mode
+- ...
+
+Example register definitions and initialization:
+
+```c
+// PLIC register definitions
+#define PLIC_BASE           0x0C000000
+#define PLIC_PRIORITY(id)   (PLIC_BASE + (id) * 4)
+#define PLIC_PENDING(id)    (PLIC_BASE + 0x1000 + ((id) / 32) * 4)
+#define PLIC_ENABLE(hart, mode, id) \
+    (PLIC_BASE + 0x2000 + (hart) * 0x100 + (mode) * 0x80 + ((id) / 32) * 4)
+#define PLIC_THRESHOLD(hart, mode) \
+    (PLIC_BASE + 0x200000 + (hart) * 0x2000 + (mode) * 0x1000)
+#define PLIC_CLAIM(hart, mode) \
+    (PLIC_BASE + 0x200004 + (hart) * 0x2000 + (mode) * 0x1000)
+
+// Initialize PLIC
+void plic_init(void) {
+    // Set priority of interrupt source 1 to 7 (highest)
+    *(volatile uint32_t *)PLIC_PRIORITY(1) = 7;
+
+    // Enable interrupt source 1 for hart 0 M-mode
+    uint32_t *enable_reg = (uint32_t *)PLIC_ENABLE(0, 0, 1);  // mode 0 = M-mode
+    *enable_reg |= (1 << (1 % 32));
+
+    // Set priority threshold to 0 (accept all interrupts with priority > 0)
+    *(volatile uint32_t *)PLIC_THRESHOLD(0, 0) = 0;
+
+    // Enable M-mode external interrupt
+    set_csr(mie, 1 << 11);  // MEIE
+    set_csr(mstatus, 1 << 3);  // MIE
+}
+
+// PLIC interrupt handler
+void plic_handler(void) {
+    // Claim interrupt (read source ID)
+    uint32_t source = *(volatile uint32_t *)PLIC_CLAIM(0, 0);
+
+    if (source == 0) {
+        // No pending interrupt (should not happen)
+        return;
+    }
+
+    // Handle interrupt
+    printf("Handling PLIC interrupt from source %u\n", source);
+    handle_device_interrupt(source);
+
+    // Complete interrupt (write back source ID)
+    *(volatile uint32_t *)PLIC_CLAIM(0, 0) = source;
+}
+```
+
 **Claim and Completion**
 
 The PLIC uses a claim/complete protocol:
@@ -666,6 +774,186 @@ ARM's GIC is the standard interrupt controller for ARM systems. Comparing with R
 - RISC-V's modular approach (PLIC/CLIC/AIA) allows implementations to choose the right complexity
 - ARM's unified GIC provides consistency but mandates more complexity
 - RISC-V is catching up with AIA for advanced features
+
+---
+
+## 🛠️ Hands-on Lab: Lab 4.1 — Your First Trap Handler
+
+This lab guides you through implementing a minimal Trap Handler that handles an Illegal Instruction and gracefully skips over it.
+
+### Lab Objectives
+
+1. Set `mtvec` to point to your Trap Handler
+2. Read `mcause` to determine the trap type
+3. Modify `mepc` to skip over the bad instruction
+4. Return using `mret`
+
+### Code
+
+Create `lab4_trap.S`:
+
+```assembly
+# lab4_trap.S - Minimal Trap Handler Implementation
+.section .text
+.global _start
+
+_start:
+    # 1. Set up Trap Vector
+    la t0, trap_handler
+    csrw mtvec, t0          # Tell CPU: jump here when trap occurs
+
+    # 2. Execute some normal instructions
+    li a0, 100
+    li a1, 200
+    add a2, a0, a1          # a2 = 300
+
+    # 3. Deliberately trigger an illegal instruction
+    .word 0xFFFFFFFF        # This is NOT a valid RISC-V instruction!
+
+    # 4. If Handler is correct, we skip the above and continue here
+    li a3, 999              # Marker: we successfully skipped it!
+
+    # 5. Exit program
+    li a7, 93               # exit syscall
+    li a0, 0                # exit code
+    ecall
+
+# ============================================
+# Trap Handler
+# ============================================
+.align 4                    # mtvec requires 4-byte alignment
+trap_handler:
+    # Save registers we'll use
+    addi sp, sp, -16
+    sd t0, 0(sp)
+    sd t1, 8(sp)
+
+    # Read trap cause
+    csrr t0, mcause
+
+    # Check if Illegal Instruction (cause = 2)
+    li t1, 2
+    bne t0, t1, unknown_trap
+
+    # It's an illegal instruction! Skip it
+    # Read mepc (address of trapping instruction)
+    csrr t0, mepc
+
+    # Assume 32-bit instruction, skip 4 bytes
+    # (Compressed instructions are 2 bytes; simplified here)
+    addi t0, t0, 4
+    csrw mepc, t0           # Update mepc
+
+    # Restore registers
+    ld t0, 0(sp)
+    ld t1, 8(sp)
+    addi sp, sp, 16
+
+    # Return! CPU will jump to new mepc
+    mret
+
+unknown_trap:
+    # Unknown trap, halt
+    j unknown_trap
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -o lab4_trap lab4_trap.S
+
+# Run with QEMU (requires Machine Mode support)
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel lab4_trap
+
+# Or use Spike
+spike --isa=rv64gc lab4_trap
+```
+
+### What to Observe
+
+Use GDB to trace execution:
+
+```bash
+# Terminal 1: Start QEMU and wait for GDB
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel lab4_trap -s -S
+
+# Terminal 2: Connect GDB
+riscv64-unknown-elf-gdb lab4_trap
+(gdb) target remote :1234
+(gdb) break trap_handler
+(gdb) continue
+```
+
+When the breakpoint hits, examine:
+
+```gdb
+(gdb) info registers mcause    # Should show 2 (Illegal Instruction)
+(gdb) info registers mepc      # Address of the .word 0xFFFFFFFF
+(gdb) stepi                    # Step through handler
+```
+
+> **danieRTOS Reference**: The context switch mechanism in danieRTOS builds on these trap handling fundamentals, using `mret` to switch between tasks.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Forgetting to Set `mtvec`
+
+**Error Scenario**: A trap triggers at startup before `mtvec` is set, causing the CPU to jump to an uninitialized address (usually 0).
+
+```assembly
+# ❌ Wrong: mtvec not set before potential trap
+_start:
+    ecall                   # If mtvec isn't set, jumps to unknown address
+
+# ✅ Correct: Set mtvec as the first thing
+_start:
+    la t0, trap_handler
+    csrw mtvec, t0
+    # Now safe to execute instructions that might trap
+```
+
+### Pitfall 2: Corrupting Caller's Registers in Handler
+
+**Error Scenario**: The Trap Handler uses `a0`, `t0`, etc. without saving/restoring them, causing the interrupted program's data to be corrupted.
+
+```assembly
+# ❌ Wrong: Directly using registers
+trap_handler:
+    csrr t0, mcause         # t0 is overwritten!
+    # ... handle ...
+    mret                    # Original t0 value is gone
+
+# ✅ Correct: Save first, restore after
+trap_handler:
+    addi sp, sp, -8
+    sd t0, 0(sp)            # Save t0
+
+    csrr t0, mcause
+    # ... handle ...
+
+    ld t0, 0(sp)            # Restore t0
+    addi sp, sp, 8
+    mret
+```
+
+### Pitfall 3: Confusing `mret` with `ret`
+
+**Error Scenario**: Using `ret` instead of `mret` at the end of the Trap Handler.
+
+```assembly
+# ❌ Wrong: ret is just jalr x0, 0(ra), doesn't restore privilege level
+trap_handler:
+    # ...
+    ret                     # Jumps to ra, but privilege unchanged, mepc unused
+
+# ✅ Correct: mret restores mstatus.MPP and jumps to mepc
+trap_handler:
+    # ...
+    mret                    # Correct return
+```
 
 ---
 

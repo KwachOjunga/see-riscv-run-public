@@ -10,6 +10,62 @@ This chapter explores how RISC-V implements privilege separation, from the manda
 
 ---
 
+## 🎯 Learning Objectives
+
+After completing this chapter, you will be able to:
+
+1. **Understand why layered protection is necessary**: Grasp the core concepts of Isolation & Protection, and why modern processors must restrict applications from directly accessing hardware
+2. **Master the privilege differences between M/S/U modes**: Clearly distinguish the capabilities and limitations of Machine Mode (building manager), Supervisor Mode (corporate tenant), and User Mode (regular employee)
+3. **Understand how SBI serves as M-mode's service window**: Grasp how the Supervisor Binary Interface acts as the standard communication bridge between S-mode and M-mode
+4. **Use ecall to request services**: Understand how applications "make a phone call" to the operating system or firmware via the `ecall` instruction to obtain needed services
+
+---
+
+## 💡 Scenario: The Smart Building's Access Card — Understanding Privilege Levels
+
+> **Scene**: In front of the lab whiteboard. Junior points at the screen showing "Illegal Instruction Exception" with a puzzled look. Architect sets down his coffee cup and adjusts his glasses.
+
+**Junior**: "Architect, I just wanted to temporarily disable interrupts in my application to get more precise timing. Why did the CPU throw an error and kick me out? I bought this board myself!"
+
+**Architect**: "Junior, you're thinking about the CPU too simply. Modern processor design is like a **'smart office building'** — for security, there must be strict access levels."
+
+**Junior**: "Access levels?"
+
+**Architect**: "Think about it this way:
+
+- **M-mode (Machine Mode) is the 'Building Manager'**: This is the highest authority. They have the master key to the entire building and can directly control the main power switches (hardware reset, clock configuration). Only they can talk directly to the building's infrastructure.
+
+- **S-mode (Supervisor Mode) is the 'Corporate Tenant'**: This is our operating system (OS). It rents several floors and can decide how to arrange the desks (memory management) and who sits where (scheduling), but it can't cut power to the entire building or interfere with other companies' floors.
+
+- **U-mode (User Mode) is the 'Regular Employee'**: This is your application. You can only work within your assigned desk area (allocated memory). Want to adjust the AC? No way. Want to flip the main power switch? Not a chance."
+
+**Junior**: "So what if I'm actually cold and want to adjust the AC? (meaning: need hardware resources)"
+
+**Architect**: "You have to 'call the front desk.' In RISC-V, this is called **`ecall` (Environment Call)**. You make a request, the OS (S-mode) checks if you're authorized, and if reasonable, the OS does it for you. If it involves lower-level hardware, the OS has to request M-mode's help."
+
+**Junior**: "I see! So when I tried to disable interrupts, it was like an intern trying to run to the server room and pull the main breaker?"
+
+**Architect**: "Exactly. Security (the CPU's hardware exception mechanism) immediately stopped you. This layered protection is the key reason why the system doesn't crash completely because of one bad program."
+
+```
+        ┌─────────────────────────────────────────┐
+        │         M-mode (Building Manager)        │
+        │  ┌─────────────────────────────────┐    │
+        │  │    S-mode (Corporate Tenant/OS)  │    │
+        │  │  ┌─────────────────────────┐    │    │
+        │  │  │   U-mode (Employee/App)  │    │    │
+        │  │  │                         │    │    │
+        │  │  │    ecall ──────────────►│────┼───►│ Call the front desk
+        │  │  │    ◄─────────────────── │◄───┼────│ Response
+        │  │  └─────────────────────────┘    │    │
+        │  └─────────────────────────────────┘    │
+        └─────────────────────────────────────────┘
+```
+
+> 💡 **Key Insight**: Privilege levels aren't meant to restrict you — they're meant to protect the entire system. Just like building access control isn't meant to hassle employees, but to prevent one person's mistake from causing a building-wide power outage.
+
+---
+
 ## 3.1 RISC-V Privilege Architecture
 
 **The Privilege Model**
@@ -402,6 +458,243 @@ The bare-metal EEI is defined by the hardware platform and any runtime library u
 - Memory map documentation
 
 Bare-metal programming is common in embedded systems, IoT devices, and real-time applications where the overhead of an OS is unacceptable or unnecessary.
+
+---
+
+## 🛠️ Lab 3.1: The Ecall Elevator
+
+This Lab's goal is to let you "see" the privilege mode transition process. We'll use QEMU to simulate a simple bare-metal environment and observe how a User Mode program "takes the elevator" to a higher privilege level via `ecall`.
+
+### Objectives
+
+1. Understand how the `ecall` instruction triggers an exception and traps to a higher privilege level
+2. Observe the `mcause` register value to confirm the exception type is "Environment call from U-mode"
+3. Observe the `mepc` register to confirm it points to the `ecall` instruction address
+
+### Environment Requirements
+
+- QEMU RISC-V emulator (`qemu-system-riscv64`)
+- RISC-V GCC toolchain (`riscv64-unknown-elf-gcc`)
+- GDB debugger
+
+### Code
+
+**File: `ecall_elevator.S`**
+
+```assembly
+# Lab 3.1: The Ecall Elevator
+# Observe how ecall transitions from U-mode to M-mode
+
+.section .text
+.global _start
+
+# ============================================================
+# M-mode Initialization and Trap Handler Setup
+# ============================================================
+_start:
+    # Set up Trap Handler
+    la      t0, trap_handler
+    csrw    mtvec, t0
+
+    # Set up User Stack (simplified: using fixed address)
+    li      sp, 0x80010000
+
+    # Prepare to switch to U-mode
+    # mstatus.MPP = 0 (U-mode), mstatus.MPIE = 1
+    li      t0, (0 << 11) | (1 << 7)    # MPP=0 (U-mode), MPIE=1
+    csrw    mstatus, t0
+
+    # Set return address (mepc = user_code)
+    la      t0, user_code
+    csrw    mepc, t0
+
+    # Switch to U-mode
+    mret
+
+# ============================================================
+# User Mode Code (U-mode)
+# ============================================================
+user_code:
+    # We're now executing in U-mode
+
+    # Prepare syscall arguments
+    li      a7, 100         # syscall number = 100 (custom)
+    li      a0, 42          # arg0 = 42
+
+    # Press the elevator button!
+    ecall                   # <-- Set breakpoint here to observe
+
+    # After ecall returns, a0 contains the return value
+    # (This example returns a0 + 1 = 43)
+
+user_loop:
+    j       user_loop       # Infinite loop
+
+# ============================================================
+# M-mode Trap Handler
+# ============================================================
+.align 4
+trap_handler:
+    # === Observation Point 1: Read exception cause ===
+    csrr    t0, mcause      # t0 = exception cause
+    # U-mode ecall: mcause = 8 (Environment call from U-mode)
+
+    # === Observation Point 2: Read exception address ===
+    csrr    t1, mepc        # t1 = address where ecall occurred
+
+    # === Observation Point 3: Read previous privilege state ===
+    csrr    t2, mstatus     # mstatus.MPP shows previous mode
+
+    # Simple syscall handling: return a0 + 1
+    addi    a0, a0, 1       # return value = argument + 1
+
+    # Skip past ecall instruction (ecall is 4 bytes)
+    addi    t1, t1, 4
+    csrw    mepc, t1
+
+    # Return to U-mode
+    mret
+```
+
+### Execution Steps
+
+**1. Compile the program**
+
+```bash
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -T linker.ld \
+    -o ecall_elevator.elf ecall_elevator.S
+```
+
+**2. Start QEMU and connect GDB**
+
+```bash
+# Terminal 1: Start QEMU
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel ecall_elevator.elf -S -gdb tcp::1234
+
+# Terminal 2: Connect GDB
+riscv64-unknown-elf-gdb ecall_elevator.elf
+(gdb) target remote :1234
+(gdb) break trap_handler
+(gdb) continue
+```
+
+**3. Observe key registers**
+
+When the breakpoint triggers, execute in GDB:
+
+```gdb
+# Check exception cause
+(gdb) print/x $mcause
+# Expected: 0x8 (Environment call from U-mode)
+
+# Check ecall instruction address
+(gdb) print/x $mepc
+# Expected: points to ecall address in user_code
+
+# Check previous privilege state
+(gdb) print/x $mstatus
+# Check MPP bits (bit 12:11): 00 = U-mode
+```
+
+### Key Observations
+
+| Register | Value | Meaning |
+|----------|-------|---------|
+| `mcause` | `0x8` | Exception Code 8 = Environment call from U-mode |
+| `mepc` | `ecall address` | Instruction address when trap occurred |
+| `mstatus.MPP` | `0b00` | Previously in U-mode (00=U, 01=S, 11=M) |
+
+### Food for Thought
+
+> 💭 **Question**: Why does the Trap Handler need to add 4 to `mepc` before returning?
+>
+> **Answer**: If we don't skip past `ecall`, `mret` will return to the same `ecall` instruction, causing an infinite trap loop! This is why real-world syscall handlers (like in danieRTOS) include `ctx[CTX_MEPC] += 4` to advance past the ecall.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Bare-Metal Mindset Carryover
+
+**Misconception**: "I'm used to writing bare-metal code on embedded systems. RISC-V should just let me access CSRs directly."
+
+**Reality**: Many RISC-V development boards run Linux, and your program executes in U-mode where you simply cannot access M-mode CSRs.
+
+```c
+// ❌ Wrong: Trying to read mstatus in Linux User Space
+#include <stdio.h>
+
+int main() {
+    unsigned long mstatus;
+    asm volatile ("csrr %0, mstatus" : "=r"(mstatus));
+    // Result: Illegal Instruction Exception, program killed by SIGILL
+    printf("mstatus = 0x%lx\n", mstatus);
+    return 0;
+}
+
+// ✅ Correct: Use system calls to get system information
+#include <stdio.h>
+#include <sys/utsname.h>
+
+int main() {
+    struct utsname buf;
+    uname(&buf);  // Request kernel to look it up via syscall
+    printf("Machine: %s\n", buf.machine);
+    return 0;
+}
+```
+
+**Diagnosis**:
+
+If your program mysteriously crashes, first check whether you're using `csrr`/`csrw` to access M-mode or S-mode specific CSRs. In a Linux environment, only a few CSRs (like `cycle`, `time`) can be read from U-mode.
+
+### Pitfall 2: Forgetting to Skip Past ecall
+
+**Symptom**: After the Trap Handler finishes, the CPU enters an infinite trap loop.
+
+**Cause**: `mepc` still points to the `ecall` instruction. After `mret`, it immediately executes `ecall` again, triggering another trap.
+
+```assembly
+# ❌ Wrong: Not updating mepc
+trap_handler:
+    csrr    t0, mcause
+    # ... handle syscall ...
+    mret                # Returns to same ecall, infinite loop!
+
+# ✅ Correct: Skip past ecall instruction
+trap_handler:
+    csrr    t0, mcause
+    csrr    t1, mepc
+    addi    t1, t1, 4   # ecall is 4 bytes
+    csrw    mepc, t1
+    # ... handle syscall ...
+    mret                # Returns to instruction after ecall
+```
+
+### Pitfall 3: Confusing M/S/U-Specific CSRs
+
+**Symptom**: Want to read trap information but used the wrong CSR prefix.
+
+**Explanation**: RISC-V CSRs have different prefixes based on privilege level:
+
+| Prefix | Privilege Level | Examples |
+|--------|-----------------|----------|
+| `m` | Machine | `mstatus`, `mcause`, `mepc`, `mtvec` |
+| `s` | Supervisor | `sstatus`, `scause`, `sepc`, `stvec` |
+| none | User (some readable) | `cycle`, `time`, `instret` |
+
+```assembly
+# ❌ Wrong: Reading S-mode CSR in M-mode Trap Handler
+trap_handler:
+    csrr    t0, scause      # This reads S-mode's exception cause, not current!
+
+# ✅ Correct: Use M-mode CSRs in M-mode
+trap_handler:
+    csrr    t0, mcause      # Read M-mode's exception cause
+```
+
+> 💡 **Memory Tip**: Use the CSRs for the level you're in. M-mode uses `m*`, S-mode uses `s*`.
 
 ---
 

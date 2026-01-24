@@ -4,6 +4,10 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "translator" for architecture porting. When you need to port ARM code to RISC-V (or vice versa), check the comparison tables here.
+
+---
+
 This appendix provides a side-by-side comparison of common instructions between RISC-V and ARM (ARMv8-A AArch64). This reference is designed to help developers porting code between the two architectures.
 
 ---

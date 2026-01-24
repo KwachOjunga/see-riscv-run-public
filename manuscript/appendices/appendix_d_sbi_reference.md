@@ -4,6 +4,152 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "API manual" for S-mode calling M-mode services. When you forget whether a7 is EID or FID, flip right here.
+
+---
+
+## 🎯 SBI Calling Convention Diagram
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                    S-mode (Kernel/OS)                           │
+│                                                                 │
+│    ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐             │
+│    │   a7    │ │   a6    │ │ a0-a5   │ │  ecall  │             │
+│    │  EID    │ │  FID    │ │  Args   │ │ ──────► │             │
+│    └─────────┘ └─────────┘ └─────────┘ └─────────┘             │
+│       │           │           │                                 │
+├───────┼───────────┼───────────┼─────────────────────────────────┤
+│       ▼           ▼           ▼                                 │
+│    ┌─────────────────────────────────────────┐                 │
+│    │         Trap to M-mode (OpenSBI)        │                 │
+│    └─────────────────────────────────────────┘                 │
+│       │                                                         │
+│       ▼                                                         │
+│    ┌─────────┐ ┌─────────┐                                     │
+│    │   a0    │ │   a1    │                                     │
+│    │ Error   │ │ Value   │                                     │
+│    │  Code   │ │(Return) │                                     │
+│    └─────────┘ └─────────┘                                     │
+│                                                                 │
+│                    M-mode (OpenSBI Firmware)                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Memory Aid**: `a7 = EID (Which Extension)`, `a6 = FID (Which Function)`
+
+---
+
+## 📋 Common EID Quick Reference
+
+| EID (Hex) | EID (ASCII) | Name | Purpose | Common FID |
+|-----------|-------------|------|---------|------------|
+| `0x10` | — | **Base** | Query SBI version/vendor | 0=version, 3=probe Extension |
+| `0x54494D45` | "TIME" | **Timer** | Set Timer interrupt | 0=set_timer |
+| `0x735049` | "sPI" | **IPI** | Cross-core interrupt | 0=send_ipi |
+| `0x52464E43` | "RFNC" | **RFENCE** | Remote TLB flush | 0-6 (various fences) |
+| `0x4442434E` | "DBCN" | **Debug Console** | Debug output | 0=write, 1=read |
+| `0x48534D` | "HSM" | **Hart State Mgmt** | Start/stop Hart | 0=start, 1=stop |
+
+---
+
+## 🛠️ Common SBI Wrappers (Copy-Paste Ready)
+
+### sbi_call Universal Interface
+
+```c
+struct sbiret {
+    long error;
+    long value;
+};
+
+static inline struct sbiret sbi_call(long eid, long fid,
+    long a0, long a1, long a2, long a3, long a4, long a5)
+{
+    struct sbiret ret;
+    register long r_a0 asm("a0") = a0;
+    register long r_a1 asm("a1") = a1;
+    register long r_a2 asm("a2") = a2;
+    register long r_a3 asm("a3") = a3;
+    register long r_a4 asm("a4") = a4;
+    register long r_a5 asm("a5") = a5;
+    register long r_a6 asm("a6") = fid;
+    register long r_a7 asm("a7") = eid;
+
+    asm volatile("ecall"
+        : "+r"(r_a0), "+r"(r_a1)
+        : "r"(r_a2), "r"(r_a3), "r"(r_a4), "r"(r_a5), "r"(r_a6), "r"(r_a7)
+        : "memory");
+
+    ret.error = r_a0;
+    ret.value = r_a1;
+    return ret;
+}
+```
+
+### Common Function Wrappers
+
+```c
+// 1. Set Timer Interrupt (Most commonly used!)
+static inline void sbi_set_timer(uint64_t stime_value) {
+    sbi_call(0x54494D45, 0, stime_value, 0, 0, 0, 0, 0);
+}
+
+// 2. Write a character (Debug Console)
+static inline void sbi_debug_console_write_byte(char c) {
+    sbi_call(0x4442434E, 2, c, 0, 0, 0, 0, 0);
+}
+
+// 3. Query SBI version
+static inline long sbi_get_spec_version(void) {
+    struct sbiret ret = sbi_call(0x10, 0, 0, 0, 0, 0, 0, 0);
+    return ret.value;
+}
+
+// 4. Probe if Extension is supported
+static inline long sbi_probe_extension(long eid) {
+    struct sbiret ret = sbi_call(0x10, 3, eid, 0, 0, 0, 0, 0);
+    return ret.value;  // 0 = not supported, non-0 = supported
+}
+```
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: EID and FID Order Confused
+
+**Symptom**: SBI call returns `SBI_ERR_NOT_SUPPORTED`.
+
+**Cause**: a7 and a6 are swapped.
+
+```c
+// ❌ Wrong: EID and FID swapped
+register long a6 asm("a6") = 0x10;        // Should be FID
+register long a7 asm("a7") = 0;           // Should be EID
+
+// ✅ Correct: a7=EID, a6=FID
+register long a6 asm("a6") = 0;           // FID = 0 (get_spec_version)
+register long a7 asm("a7") = 0x10;        // EID = 0x10 (Base Extension)
+```
+
+### Pitfall 2: Forgetting to Check Error Code
+
+**Symptom**: SBI call fails but program continues, causing hard-to-trace subsequent errors.
+
+```c
+// ❌ Wrong: Ignoring error code
+sbi_set_timer(next_time);
+
+// ✅ Correct: Check error
+struct sbiret ret = sbi_call(0x54494D45, 0, next_time, 0, 0, 0, 0, 0);
+if (ret.error != 0) {
+    panic("sbi_set_timer failed: %ld", ret.error);
+}
+```
+
+---
+
 This appendix provides a comprehensive reference for RISC-V SBI (Supervisor Binary Interface) calls. SBI defines the standard interface between supervisor mode (S-mode) software and machine mode (M-mode) firmware, enabling portable operating systems across different RISC-V platforms.
 
 ---

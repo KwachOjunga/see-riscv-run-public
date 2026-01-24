@@ -4,6 +4,51 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **多維度比較架構**：從授權模式、生態系、技術債三個維度分析架構差異
+2. **理解 RISC-V 崛起原因**：明白為何 RISC-V 被稱為 "MIPS 2.0" 但卻能成功
+3. **進行技術選型**：根據專案需求（IoT vs 手機 vs 伺服器）選擇合適架構
+
+---
+
+## 💡 情境引入：圓桌會議上的戰爭
+
+> **場景**：會議室的白板上寫著三個大字：**ARM vs RISC-V vs MIPS**。氣氛嚴肅。
+
+**王工 (架構師)**：「各位，新產品線『Project X』的規格已經定了。我們要這顆晶片能跑 AI 加速，功耗要極低，重點是——BOM Cost 被壓得很死。今天我們必須決定核心架構。」
+
+**阿杰 (ARM 支持者)**：「王工，為了穩妥起見，我還是建議用 **ARM Cortex-M** 系列。雖然授權費貴了點，還要付每顆晶片的權利金，但它的工具鏈成熟，Keil、IAR 大家都會用。如果為了省錢選新架構，到時候軟體部門 Debug 抓狂，延誤上市時間，損失更大。」
+
+**小華 (新人)**：「可是杰哥，我聽說 **RISC-V** 是免費的？這樣我們利潤不是會高很多？」
+
+**王工**：「小華，精確地說，RISC-V 的 **ISA (規範)** 是免費的，但好的 **IP (設計圖)** 還是要錢（例如 SiFive 或 Andes），只是通常不用付權利金。這對我們這種出貨量大的產品來說，確實能省下一大筆『過路費』。」
+
+**陳教授 (顧問)**：「而且不僅僅是錢的問題。阿杰，你考慮過技術彈性嗎？ARM 的指令集是封閉的。如果要為我們的 AI 演算法加幾條特殊指令，ARM 會理你嗎？但在 RISC-V，我們可以利用 **Custom Extension**，自己加幾條指令進去，效能可能提升十倍。」
+
+**阿杰**：「教授說得有道理，但 Custom Extension 也有風險。如果我們自己亂加指令，GCC 和 LLVM 都不認識，那不是又要自己養一個編譯器團隊？」
+
+**王工**：「這就是 Trade-off。我整理一下：
+
+| 考量點 | ARM | RISC-V | 決策影響 |
+|-------|-----|--------|---------|
+| **授權成本** | 高（Per-chip Royalty） | 低（無 Royalty） | 大量出貨時 RISC-V 省錢 |
+| **生態成熟度** | 高（20+ 年） | 中（快速成長中） | 短期 ARM 安全，長期 RISC-V 有潛力 |
+| **客製化彈性** | 低（需談判） | 高（Custom Ext.） | AI/加密加速 RISC-V 優勢 |
+| **軟體工具** | 成熟 | 改善中 | Debug 體驗 ARM 暫時領先 |
+
+」
+
+**小華**：「那 MIPS 呢？我記得大學課本好像都是教 MIPS？」
+
+**陳教授**：「MIPS 是經典，對教學貢獻很大。但它的商業模式出了問題——授權太貴、IP 公司多次易手、生態系凋零。RISC-V 在很多方面繼承了 MIPS 的精神（Clean RISC Design），但學到了教訓：**用開源模式避免專利地獄**。」
+
+**王工**：「好，我們的結論是：如果是短期專案、要求穩定上市，選 **ARM**；如果是長期布局、需要客製化且在意成本，選 **RISC-V**。至於 MIPS，除非維護舊產品線，否則不推薦新專案使用。」
+
+---
+
 Architecture 選擇塑造一切。Instruction set 決定 software 如何表達計算、hardware 如何實現執行，以及 ecosystem 如何圍繞 platform 發展。RISC-V 進入一個由 ARM 主導 mobile 和 embedded system、歷史上受 MIPS 影響的 education 和 networking 的環境。理解這些 architecture 如何比較，揭示了 RISC-V 的設計決策、trade-off 和競爭地位。
 
 本章提供 RISC-V、ARM 和 MIPS 在十一個維度的系統性比較：ISA 設計哲學、instruction set complexity、register architecture、exception 和 interrupt model、memory model、virtual memory、interrupt architecture、calling convention、pipeline 和 microarchitecture、ecosystem 和 licensing，以及 future direction。每個章節檢視 architecture 如何處理相同問題，突出相似性、差異性，以及對 software 和 hardware 的影響。

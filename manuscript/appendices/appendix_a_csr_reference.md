@@ -4,6 +4,148 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "dashboard" during development. When you need to look up a CSR's bit positions or operation methods, flip right here.
+
+---
+
+## 🛠️ Common CSR Quick Reference
+
+### `mstatus` (Machine Status) Bit Map
+
+This is the most frequently used CSR, controlling interrupts, privilege modes, and other core functions.
+
+```text
+63    62    38 37 36   34 33 32   22 21 20 19 18 17   13 12 11 10  9  8  7  6  5  4  3  2  1  0
+┌────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┐
+│ SD │WPRI│ MBE│ SBE│ SXL│ UXL│WPRI│ TSR│ TW │ TVM│ MXR│ SUM│MPRV│ XS │ FS │ MPP│WPRI│ SPP│MPIE│
+└────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┘
+                                                                   │     │     │
+                                                                   │     │     └─ Bit 7: MPIE
+                                                                   │     └─ Bit 11-12: MPP
+                                                                   └─ Bit 3: MIE
+```
+
+**Key Bit Descriptions**:
+
+| Bit | Name | Description |
+|-----|------|-------------|
+| 3 | **MIE** | Machine Interrupt Enable (global interrupt switch) |
+| 7 | **MPIE** | Previous MIE (MIE value before entering trap) |
+| 11-12 | **MPP** | Previous Privilege (00=U, 01=S, 11=M) |
+| 17 | **MPRV** | Modify Privilege (Load/Store use MPP privilege) |
+
+### Common Operation Snippets
+
+```c
+// 1. Enable Global Interrupt
+csrs mstatus, (1 << 3);   // Set MIE bit
+
+// 2. Disable Global Interrupt
+csrc mstatus, (1 << 3);   // Clear MIE bit
+
+// 3. Set next mode to S-mode (preparing for mret)
+csrc mstatus, (3 << 11);  // Clear MPP
+csrs mstatus, (1 << 11);  // Set MPP = 01 (S-mode)
+
+// 4. Read current MPP value
+csrr t0, mstatus
+srli t0, t0, 11
+andi t0, t0, 3            // t0 = MPP (0=U, 1=S, 3=M)
+```
+
+---
+
+### `mie` / `mip` (Interrupt Enable/Pending) Reference
+
+These two CSRs control interrupt enable and pending status.
+
+```text
+Bit Position Reference:
+┌─────────────────────────────────────────────────────────────┐
+│  11  │  9   │  7   │  5   │  3   │  1   │                   │
+│ MEIE │ SEIE │ MTIE │ STIE │ MSIE │ SSIE │                   │
+│  M   │  S   │  M   │  S   │  M   │  S   │                   │
+│ Ext  │ Ext  │Timer │Timer │ Soft │ Soft │                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Common Operations**:
+
+```c
+// Enable Machine Timer Interrupt
+csrs mie, (1 << 7);       // Set MTIE
+
+// Enable Machine External Interrupt
+csrs mie, (1 << 11);      // Set MEIE
+
+// Check if Timer Interrupt is Pending
+csrr t0, mip
+andi t0, t0, (1 << 7)     // t0 != 0 means Timer interrupt pending
+```
+
+---
+
+### `mcause` (Machine Cause) Decode Table
+
+When a trap occurs, `mcause` tells you the reason.
+
+**Interrupt (mcause[63] = 1)**:
+
+| Code | Name | Description |
+|------|------|-------------|
+| 1 | Supervisor Software Interrupt | S-mode software interrupt |
+| 3 | Machine Software Interrupt | M-mode software interrupt |
+| 5 | Supervisor Timer Interrupt | S-mode timer interrupt |
+| 7 | Machine Timer Interrupt | M-mode timer interrupt |
+| 9 | Supervisor External Interrupt | S-mode external interrupt |
+| 11 | Machine External Interrupt | M-mode external interrupt |
+
+**Exception (mcause[63] = 0)**:
+
+| Code | Name | Description |
+|------|------|-------------|
+| 0 | Instruction Address Misaligned | Instruction address not aligned |
+| 1 | Instruction Access Fault | Instruction access error |
+| 2 | Illegal Instruction | Invalid instruction |
+| 3 | Breakpoint | Breakpoint (ebreak) |
+| 4 | Load Address Misaligned | Load address not aligned |
+| 5 | Load Access Fault | Load access error |
+| 6 | Store Address Misaligned | Store address not aligned |
+| 7 | Store Access Fault | Store access error |
+| 8 | Environment Call from U-mode | U-mode ecall |
+| 9 | Environment Call from S-mode | S-mode ecall |
+| 11 | Environment Call from M-mode | M-mode ecall |
+| 12 | Instruction Page Fault | Instruction page fault |
+| 13 | Load Page Fault | Load page fault |
+| 15 | Store Page Fault | Store page fault |
+
+**Trap Handler Example**:
+
+```c
+void trap_handler() {
+    uint64_t cause;
+    asm volatile ("csrr %0, mcause" : "=r" (cause));
+
+    if (cause & (1UL << 63)) {
+        // Interrupt
+        uint64_t code = cause & 0x7FF;
+        switch (code) {
+            case 7:  handle_timer_interrupt(); break;
+            case 11: handle_external_interrupt(); break;
+        }
+    } else {
+        // Exception
+        switch (cause) {
+            case 2:  handle_illegal_instruction(); break;
+            case 7:  handle_store_access_fault(); break;
+            case 8:  handle_ecall_from_umode(); break;
+        }
+    }
+}
+```
+
+---
+
 This appendix provides a comprehensive reference for RISC-V Control and Status Registers (CSRs). CSRs control processor behavior, report status, and provide access to privileged functionality. Each CSR has a 12-bit address and is accessed using dedicated CSR instructions (CSRRW, CSRRS, CSRRC, and their immediate variants).
 
 ---

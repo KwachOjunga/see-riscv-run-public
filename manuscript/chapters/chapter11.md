@@ -4,6 +4,59 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Decode ISA Naming**: Parse the meaning of ISA strings like RV64GC, RV32IM
+2. **Understand the G Package**: Know that G = IMAFD and its historical background
+3. **Master Z/X Extension Logic**: Understand the naming rules for new-style Extensions
+4. **Compare Hardware vs Software Implementation**: Understand the performance difference between hardware instructions and software emulation
+5. **Detect Extension Presence**: Query CPU-supported features via the `misa` CSR
+
+---
+
+## 💡 Scenario: Skill Trees and DLCs
+
+> **Scene**: Junior is reading Linux Kernel compile options and gets intimidated by a long ISA string.
+
+**Junior**: "Senior, is this `MARCH` variable a Wi-Fi password? `RV64IMAFDC_Zicsr`... who can read this?"
+
+**Senior**: (laughs) "This is RISC-V's ID card. Don't worry—let's treat it like RPG character stats. Breaking it down makes it simple."
+
+**Junior**: "RPG stats?"
+
+**Senior**: "Look at the first two characters **RV64**—this means it's a 64-bit character that can wield two-handed swords (64-bit registers). RV32 would be 32-bit."
+
+**Junior**: "I get that part. What about that string of letters?"
+
+**Senior**: "Those are 'skills it has learned.' Each letter represents an ability:
+
+| Letter | Name | Analogy | Function |
+|--------|------|---------|----------|
+| **I** | Integer | Basic Training | Addition, subtraction, logic ops—essential skill |
+| **M** | Multiply | Multiplication Skill | Hardware multiply/divide—without it, you do N additions |
+| **A** | Atomic | Locking Skill | Atomic operations—the foundation of spinlocks |
+| **F** | Float | Single-Precision Magic | 32-bit floating-point math |
+| **D** | Double | Double-Precision Magic | 64-bit floating-point math |
+| **C** | Compressed | Contortion Skill | 16-bit compressed instructions—saves space |
+
+"
+
+**Junior**: "Makes sense. But what about **RV64GC** that everyone talks about? There's no G in that table!"
+
+**Senior**: "**G (General)** is a 'value bundle.' Since IMAFD are so commonly used together, the spec defines **G = I + M + A + F + D**. So `RV64GC` is really shorthand for `RV64IMAFDC`—the baseline for running Linux."
+
+**Junior**: "Got it! What about that **Z** prefix at the end? Hidden skill?"
+
+**Senior**: "Pretty much. Since 26 letters aren't enough anymore, newer features (or features split out from I) use **Z** prefix plus a name. Think of them as **DLC expansions**.
+
+For example, `Zicsr` means CSR operations are supported, `Zifencei` means instruction fence is supported. This 'password' just tells the compiler: 'This CPU bought these DLCs, feel free to use these instructions'!"
+
+**Junior**: "Ha! So it's just a skill list—that makes it much clearer!"
+
+---
+
 RISC-V's modular design is one of its most distinctive features. Unlike monolithic instruction set architectures that bundle everything together, RISC-V separates functionality into a minimal base ISA plus optional extensions. This approach allows implementations to include only the features they need, from tiny microcontrollers to high-performance servers.
 
 The base integer ISA (RV32I or RV64I) provides just enough instructions to run a complete operating system and applications—47 instructions in total. But most practical systems need more: multiplication and division, atomic operations for synchronization, floating-point arithmetic, and compressed instructions for code density. These capabilities come from standard extensions, each identified by a single letter.
@@ -657,6 +710,189 @@ Separate profiles exist for embedded systems:
 - Real-time profiles: Add requirements for deterministic interrupt handling
 
 These profiles ensure that embedded software can target well-defined platforms.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 11.1 — The Power of Hardware Acceleration (Soft vs Hard Mul)
+
+This lab demonstrates the performance difference between "having the M Extension" and "not having the M Extension" through compiler options.
+
+### Lab Objectives
+
+1. Use the same C code (multiplication operations)
+2. Compile for **RV64I** (no multiply instruction) and **RV64IM** (with multiply instruction)
+3. Observe Assembly differences
+4. Compare execution cycles
+
+### Code
+
+Create `mul_test.c`:
+
+```c
+// mul_test.c - Compare software vs hardware multiply
+#include <stdint.h>
+
+// Read cycle counter
+static inline uint64_t read_cycles(void) {
+    uint64_t val;
+    asm volatile("csrr %0, mcycle" : "=r"(val));
+    return val;
+}
+
+// Simple multiply function
+long multiply(long a, long b) {
+    return a * b;
+}
+
+// Multiple multiplication test
+volatile long result;
+void bench_multiply(int iterations) {
+    long a = 123456;
+    long b = 789012;
+    for (int i = 0; i < iterations; i++) {
+        result = multiply(a, b);
+        a++;
+    }
+}
+
+int main(void) {
+    int iterations = 10000;
+
+    uint64_t start = read_cycles();
+    bench_multiply(iterations);
+    uint64_t end = read_cycles();
+
+    // Simple output (assumes putchar available)
+    // cycles = end - start
+    return 0;
+}
+```
+
+### Experiment Steps
+
+**Step A: Compile as RV64IM (with multiply instruction)**
+
+```bash
+# Tell compiler it can use multiply instructions (mul, mulw, etc.)
+riscv64-unknown-elf-gcc -O2 -march=rv64im -mabi=lp64 \
+    -c mul_test.c -o mul_hard.o
+
+# View Assembly
+riscv64-unknown-elf-objdump -d mul_hard.o
+```
+
+**Observe Assembly**:
+
+```assembly
+multiply:
+    mul     a0, a0, a1    # Direct hardware multiply, 1 cycle
+    ret
+```
+
+**Step B: Compile as RV64I (no multiply instruction)**
+
+```bash
+# Tell compiler "this CPU doesn't know multiplication"
+riscv64-unknown-elf-gcc -O2 -march=rv64i -mabi=lp64 \
+    -c mul_test.c -o mul_soft.o
+
+# View Assembly
+riscv64-unknown-elf-objdump -d mul_soft.o
+```
+
+**Observe Assembly**:
+
+```assembly
+multiply:
+    call    __muldi3      # Call software emulation library (libgcc)
+```
+
+### Analysis
+
+`__muldi3` is libgcc's software multiply implementation, internally composed of dozens of `add`, `shift`, `branch` instructions:
+
+```assembly
+# Simplified logic of __muldi3 (Shift-and-Add algorithm)
+__muldi3:
+    li t0, 0          # result = 0
+loop:
+    andi t1, a1, 1    # if (b & 1)
+    beqz t1, skip
+    add t0, t0, a0    #   result += a
+skip:
+    slli a0, a0, 1    # a <<= 1
+    srli a1, a1, 1    # b >>= 1
+    bnez a1, loop     # while (b != 0)
+    mv a0, t0
+    ret
+```
+
+### Expected Results
+
+| Config | Single Multiply Cycles | 10000 Multiplies |
+|--------|----------------------|------------------|
+| **RV64IM** | ~1-4 cycles | ~10,000-40,000 cycles |
+| **RV64I** | ~30-60 cycles | ~300,000-600,000 cycles |
+
+**Conclusion**: Hardware M extension can be 10-50x faster than software emulation!
+
+> **danieRTOS Reference**: The danieRTOS Makefile uses `-march=rv64gc` to ensure all standard extensions are available.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Misunderstanding G's Composition
+
+**Misconception**: "RV64G includes compressed instructions (C)"
+
+**Correct Understanding**:
+- **G = IMAFD**, does NOT include C
+- **GC = IMAFD + C**
+- Linux typically requires **RV64GC** because most distributions default to C extension for space savings
+
+```bash
+# ❌ Wrong: Thinking G includes C
+riscv64-linux-gnu-gcc -march=rv64g  # Actually doesn't have C
+
+# ✅ Correct: Explicitly specify GC
+riscv64-linux-gnu-gcc -march=rv64gc
+```
+
+### Pitfall 2: misa Detection Trap
+
+**Error Scenario**: Reading `misa` in S-mode or U-mode.
+
+**Consequence**: Illegal Instruction Exception, because `misa` is an M-mode CSR.
+
+```c
+// ❌ Wrong: Reading misa directly in S-mode
+unsigned long misa;
+asm volatile("csrr %0, misa" : "=r"(misa));  // Exception!
+
+// ✅ Correct: Get info via SBI or Device Tree
+// Or use try-catch mechanism to test specific instructions
+```
+
+### Pitfall 3: Ignoring Zicsr and Zifencei
+
+**Error Scenario**: In newer spec versions, CSR operations and FENCE.I have been separated from I.
+
+**Consequence**: Using old `-march=rv64i` may cause problems.
+
+```bash
+# Old version (pre-2019)
+# CSR operations were part of I
+
+# New version (post-2019)
+# CSR operations require explicit Zicsr
+riscv64-unknown-elf-gcc -march=rv64i_zicsr_zifencei ...
+
+# Simpler approach: Use G (it implies Zicsr and Zifencei)
+riscv64-unknown-elf-gcc -march=rv64gc ...
+```
+
+> 💡 **Tip**: In practice, use standard combinations like `rv64gc` or `rv64imac` to avoid missing essential Extensions.
 
 ---
 

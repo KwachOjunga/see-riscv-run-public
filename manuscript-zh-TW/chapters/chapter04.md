@@ -4,6 +4,42 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **區分 Exception 與 Interrupt**：理解同步與非同步 trap 的根本差異
+2. **掌握 Trap 處理流程**：理解 `mtvec`、`mepc`、`mcause`、`mtval` 的作用
+3. **撰寫 Trap Handler**：能夠實作基本的 exception handler
+4. **理解 Trap Delegation**：明白 M-mode 如何將 trap 委派給 S-mode
+5. **認識 PLIC**：了解 Platform-Level Interrupt Controller 的基本架構
+
+---
+
+## 💡 情境引入：當 CPU 按下暫停鍵
+
+> **場景**：小華盯著全黑的終端機畫面，一臉茫然。
+
+**小華**：「杰哥，我有個問題。我剛故意在程式裡塞了一個垃圾數據 `.word 0xFFFFFFFF`，結果程式直接 crash 了。但在 Linux 裡，如果有程式寫壞了，通常只是那個程式被關掉 (Segmentation Fault)，系統還是好的啊？」
+
+**阿杰**：「因為 Linux 有一個很強大的『緊急應變中心』，也就是 **Trap Handler**。但在我們現在這種裸機 (Bare-metal) 環境下，你沒寫 Handler，CPU 遇到看不懂的指令，不知道該怎麼辦，只好直接罷工。」
+
+**小華**：「所以我得自己寫這個應變中心？」
+
+**阿杰**：「沒錯。想像一下：
+
+1. **異常發生 (Trap)**：就像是產線上的機器手臂亮紅燈停機了。
+2. **硬體動作**：CPU 會自動把當下的進度 (PC) 記在 `mepc` (Machine Exception PC) 裡，然後跳轉到 `mtvec` (Trap Vector) 指定的地方去找救兵。
+3. **軟體接手 (Handler)**：這就是你要寫的程式碼。你得檢查 `mcause` (Machine Cause) 看看是誰亮紅燈，處理完問題後，再讓機器繼續跑。」
+
+**小華**：「聽起來很合理，處理完就回去繼續做原本的事？」
+
+**阿杰**：「這裡有個陷阱。如果是『中斷 (Interrupt)』(例如 Timer 響了)，處理完是回去做『原本的事』；但如果是『非法指令 (Exception)』，你回去做『原本的事』它還是非法的，會無限循環！所以你得手動幫它『跳過』那行錯誤的指令。」
+
+**小華**：「原來如此！那我們來試試看吧。」
+
+---
+
 當程式遇到錯誤、接收到 interrupt、或發出 system call 時，控制權必須從當前執行環境轉移到能夠處理該事件的 handler。RISC-V 將這種機制稱為「trap」——一個涵蓋同步 exception（如 page fault 和 illegal instruction）和非同步 interrupt（如 timer tick 和 device signal）的通用術語。
 
 理解 trap 機制是系統程式設計的基礎。作業系統依賴 trap 來實作 system call、處理錯誤、回應硬體事件。Firmware 使用 trap 來管理低階硬體並為上層軟體提供服務。即使是應用程式開發者，也能從理解 exception 如何傳播、interrupt latency 如何影響即時效能中受益。
@@ -699,11 +735,11 @@ void plic_init(void) {
     *(volatile uint32_t *)PLIC_PRIORITY(1) = 7;
 
     // 為 hart 0 M-mode 啟用 interrupt source 1
-    uint32_t *enable_reg = (uint32_t *)PLIC_ENABLE(0, 1, 1);  // mode 1 = M-mode
+    uint32_t *enable_reg = (uint32_t *)PLIC_ENABLE(0, 0, 1);  // mode 0 = M-mode
     *enable_reg |= (1 << (1 % 32));
 
     // 設定 priority threshold 為 0（接受所有 priority > 0 的 interrupt）
-    *(volatile uint32_t *)PLIC_THRESHOLD(0, 1) = 0;
+    *(volatile uint32_t *)PLIC_THRESHOLD(0, 0) = 0;
 
     // 啟用 M-mode external interrupt
     set_csr(mie, 1 << 11);  // MEIE
@@ -713,7 +749,7 @@ void plic_init(void) {
 // PLIC interrupt handler
 void plic_handler(void) {
     // Claim interrupt（讀取 source ID）
-    uint32_t source = *(volatile uint32_t *)PLIC_CLAIM(0, 1);
+    uint32_t source = *(volatile uint32_t *)PLIC_CLAIM(0, 0);
 
     if (source == 0) {
         // 沒有 pending interrupt（不應該發生）
@@ -725,7 +761,7 @@ void plic_handler(void) {
     handle_device_interrupt(source);
 
     // Complete interrupt（寫回 source ID）
-    *(volatile uint32_t *)PLIC_CLAIM(0, 1) = source;
+    *(volatile uint32_t *)PLIC_CLAIM(0, 0) = source;
 }
 ```
 
@@ -832,6 +868,195 @@ ARM 的 GIC 是成熟的 interrupt controller 架構，經過多代演進（GICv
 - **ARM**：整合、功能豐富。GIC 試圖在單一架構中滿足所有需求。
 
 RISC-V 的方法允許實作者根據需求選擇適當的 interrupt controller，從簡單的嵌入式系統（PLIC）到高效能伺服器（AIA）。
+
+---
+
+## 🛠️ 實作練習：Lab 4.1 — 你的第一個 Trap Handler
+
+這個 Lab 將帶你實作一個最小的 Trap Handler，處理非法指令 (Illegal Instruction) 並優雅地跳過它。
+
+### 實驗目標
+
+1. 設定 `mtvec` 指向你的 Trap Handler
+2. 讀取 `mcause` 判斷 trap 類型
+3. 修改 `mepc` 跳過錯誤指令
+4. 使用 `mret` 返回
+
+### 程式碼
+
+建立 `lab4_trap.S`：
+
+```assembly
+# lab4_trap.S - 最小 Trap Handler 實作
+.section .text
+.global _start
+
+_start:
+    # 1. 設定 Trap Vector
+    la t0, trap_handler
+    csrw mtvec, t0          # 告訴 CPU：trap 發生時跳到這裡
+
+    # 2. 正常執行一些指令
+    li a0, 100
+    li a1, 200
+    add a2, a0, a1          # a2 = 300
+
+    # 3. 故意觸發非法指令
+    .word 0xFFFFFFFF        # 這不是合法的 RISC-V 指令！
+
+    # 4. 如果 Handler 正確，會跳過上面那行，繼續執行這裡
+    li a3, 999              # 標記：我們成功跳過了！
+
+    # 5. 結束程式
+    li a7, 93               # exit syscall
+    li a0, 0                # exit code
+    ecall
+
+# ============================================
+# Trap Handler
+# ============================================
+.align 4                    # mtvec 要求 4-byte 對齊
+trap_handler:
+    # 保存會用到的暫存器
+    addi sp, sp, -16
+    sd t0, 0(sp)
+    sd t1, 8(sp)
+
+    # 讀取 trap 原因
+    csrr t0, mcause
+
+    # 檢查是否為 Illegal Instruction (cause = 2)
+    li t1, 2
+    bne t0, t1, unknown_trap
+
+    # 是非法指令！跳過它
+    # 讀取 mepc (發生 trap 的指令位址)
+    csrr t0, mepc
+
+    # 假設是 32-bit 指令，跳過 4 bytes
+    # (如果是 Compressed 指令則是 2 bytes，這裡簡化處理)
+    addi t0, t0, 4
+    csrw mepc, t0           # 更新 mepc
+
+    # 恢復暫存器
+    ld t0, 0(sp)
+    ld t1, 8(sp)
+    addi sp, sp, 16
+
+    # 返回！CPU 會跳到新的 mepc
+    mret
+
+unknown_trap:
+    # 未知的 trap，直接停機
+    j unknown_trap
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -o lab4_trap lab4_trap.S
+
+# 使用 QEMU 執行 (需要 Machine Mode 支援)
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel lab4_trap
+
+# 或使用 Spike
+spike --isa=rv64gc lab4_trap
+```
+
+### 觀察重點
+
+使用 GDB 追蹤執行：
+
+```bash
+# 終端 1：啟動 QEMU 並等待 GDB
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel lab4_trap -s -S
+
+# 終端 2：連接 GDB
+riscv64-unknown-elf-gdb lab4_trap
+(gdb) target remote :1234
+(gdb) break trap_handler
+(gdb) continue
+```
+
+當 trap 發生時，檢查這些 CSR：
+
+```gdb
+(gdb) info registers mepc mcause mtval
+```
+
+你應該會看到：
+
+- `mcause = 2` (Illegal Instruction)
+- `mepc` 指向 `.word 0xFFFFFFFF` 的位址
+- `mtval` 可能包含非法指令的編碼
+
+### 關鍵思考題
+
+> 💭 **為什麼 Interrupt 不需要修改 `mepc`，但 Exception 需要？**
+>
+> - **Interrupt**：是「非同步」的，發生在兩條指令之間。`mepc` 指向的是「下一條要執行的指令」，處理完 interrupt 後繼續執行它是正確的。
+> - **Exception**：是「同步」的，由當前指令觸發。`mepc` 指向的是「觸發 exception 的指令」。如果不修改 `mepc`，`mret` 後會重新執行同一條指令，再次觸發 exception，形成無限迴圈！
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：忘記設定 `mtvec`
+
+**錯誤情境**：程式一開始就觸發 trap，但 `mtvec` 還是預設值 (通常是 0)，CPU 跳到 0x0 執行垃圾資料。
+
+```assembly
+# ❌ 錯誤：還沒設定 mtvec 就可能觸發 trap
+_start:
+    ecall                   # 如果 mtvec 沒設好，這裡會跳到未知位址
+
+# ✅ 正確：第一件事就是設定 mtvec
+_start:
+    la t0, trap_handler
+    csrw mtvec, t0
+    # 現在可以安全地執行可能觸發 trap 的指令了
+```
+
+### 陷阱 2：Handler 中破壞了 Caller 的暫存器
+
+**錯誤情境**：Trap Handler 使用了 `a0`、`t0` 等暫存器，但沒有保存/恢復，導致被中斷的程式回來後資料錯亂。
+
+```assembly
+# ❌ 錯誤：直接使用暫存器
+trap_handler:
+    csrr t0, mcause         # t0 被覆蓋了！
+    # ... 處理 ...
+    mret                    # 回去後，原本的 t0 值不見了
+
+# ✅ 正確：先保存，處理完再恢復
+trap_handler:
+    addi sp, sp, -8
+    sd t0, 0(sp)            # 保存 t0
+
+    csrr t0, mcause
+    # ... 處理 ...
+
+    ld t0, 0(sp)            # 恢復 t0
+    addi sp, sp, 8
+    mret
+```
+
+### 陷阱 3：混淆 `mret` 與 `ret`
+
+**錯誤情境**：在 Trap Handler 結尾使用 `ret` 而不是 `mret`。
+
+```assembly
+# ❌ 錯誤：ret 只是 jalr x0, 0(ra)，不會恢復 privilege level
+trap_handler:
+    # ...
+    ret                     # 跳到 ra，但 privilege 沒變，mepc 沒用到
+
+# ✅ 正確：mret 會恢復 mstatus.MPP 並跳到 mepc
+trap_handler:
+    # ...
+    mret                    # 正確返回
+```
 
 ---
 

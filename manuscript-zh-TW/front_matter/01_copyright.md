@@ -1,17 +1,17 @@
-# Copyright and License
+# 版權與授權
 
 ---
 
-**See RISC-V Run: Fundamentals**
+**See RISC-V Run: Fundamentals（繁體中文版）**
 
-**A Comprehensive Guide to RISC-V Architecture**
+**RISC-V 架構完整指南**
 
-**Copyright © 2025 Danny Jiang**
+**Copyright © 2025-2026 Danny Jiang**
 
-- **Version**: Draft v0p10
-- **Published**: December 2025
-- **Author**: Danny Jiang
-- **Contact**: djiang.tw@gmail.com
+- **版本**: Draft v0p11（增強版）
+- **出版日期**: 2026 年 1 月
+- **作者**: Danny Jiang
+- **聯絡方式**: djiang.tw@gmail.com
 
 ---
 
@@ -52,21 +52,22 @@ The information in this book is based on publicly available specifications and d
 
 ---
 
-## About This Book
+## 關於本書
 
-This is the complete book "See RISC-V Run: Fundamentals". The book contains:
+這是《See RISC-V Run: Fundamentals》繁體中文版的完整書籍。本書包含：
 
-- **17 Chapters** organized into 10 Parts
-- **6 Appendices** with quick reference materials
-- **~146,600 words** (~500 pages)
-- Comprehensive coverage from ISA fundamentals to system design
-
----
-
-**Author's GitHub**: https://github.com/djiangtw
-
-**For updates and errata**: To be announced
+- **17 個章節**，分為 10 個部分
+- **6 個附錄**，包含快速參考資料
+- **約 160,000+ 字**（約 550 頁）
+- 從 ISA 基礎到系統設計的完整涵蓋
+- **v0p11 增強版**：學習目標、角色對話、Hands-on Labs、常見陷阱
 
 ---
 
-**First Edition, December 2025**
+**作者 GitHub**: https://github.com/djiangtw
+
+**更新與勘誤**: 待公布
+
+---
+
+**增強版，2026 年 1 月**

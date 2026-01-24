@@ -4,6 +4,44 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **熟記 32 個通用暫存器**：認識 x0-x31 及其 ABI 別名 (a0, s0, sp, ra...)
+2. **理解 Calling Convention**：掌握 Caller-saved 與 Callee-saved 的責任歸屬
+3. **混合編程能力**：能夠混合編寫 C 與 Assembly，並理解它們如何互動
+4. **CSR 基礎**：認識 Control and Status Register 的用途與存取方式
+5. **Privilege Level 概念**：理解 M/S/U 三種模式的權限差異
+
+---
+
+## 💡 情境引入：便條紙與倉庫
+
+> **場景**：小華的螢幕上顯示著密密麻麻的 `objdump` 輸出。
+
+**小華**：「杰哥，我快暈了。為什麼文件上說參數放在 `a0`, `a1`，可是反組譯出來的代碼全是 `x10`, `x11`？還有這個 `x1` 和 `ra` 到底是不是同一個東西？」
+
+**阿杰**：「哈，這是新手的必經之路。硬體只認得 `x0` 到 `x31` 這些編號，就像是門牌號碼。但是為了讓我們人類好寫程式，我們制定了一套『規矩』，也就是 **ABI (Application Binary Interface)**，給它們取了綽號。」
+
+**小華**：「綽號？」
+
+**阿杰**：「對。想像你在修手錶。**Register (暫存器)** 就是你眼前這張**工作桌**，空間很小，只能放 32 個零件，但是隨手就能拿到，速度最快。而 **Memory (記憶體)** 就像是背後的**大倉庫**，空間很大但拿東西很慢。」
+
+**小華**：「那 `a0` 這些名字呢？」
+
+**阿杰**：「那是工作桌的分區規劃。
+
+- **`a0-a7` (Arguments)**：就像『收發區』，別人把要修的零件放這給你，你修好也放這還給他。
+- **`t0-t6` (Temporaries)**：這是『草稿區』，你隨便用，用完亂丟沒關係。
+- **`s0-s11` (Saved)**：這是『保留區』，如果你要借用這塊地，得先把上面原本的東西收好，用完再擺回去，不然上一手的人會找不到東西。」
+
+**小華**：「原來如此！那 `ra` (Return Address) 呢？」
+
+**阿杰**：「那是『回家的路』。當函數執行完，它得知道要跳回哪一行代碼繼續執行。來，我們直接寫個程式，用模擬器追蹤一下這張『工作桌』上的變化。」
+
+---
+
 理解處理器架構始於理解其 programmer's model：軟體用來與硬體互動的 register、instruction 和慣例。RISC-V 的 programmer's model 簡潔、規則，並且設計兼顧簡潔性和效率。
 
 本章探討每個 RISC-V 程式設計師必須知道的基本元素。我們將檢視 32 個 general-purpose register 及其慣用用途、管理處理器狀態的 Control and Status Register (CSR)、將 user code 與 operating system code 分離的 privilege level，以及使 function 能夠協同工作的 calling convention。我們將看到 RISC-V 的設計選擇——如 zero register、獨立的 CSR address space 和簡潔的 privilege model——如何簡化硬體實現和軟體開發。
@@ -606,6 +644,219 @@ Zero register 非常有用：
 - `mv rd, rs` 是 `addi rd, rs, 0` 或 `add rd, rs, zero`
 - `li rd, imm` 是 `addi rd, zero, imm`
 - 丟棄結果：`add zero, a0, a1`（計算但丟棄）
+
+---
+
+## 🛠️ 實作練習：Lab 2.1 — 你的第一個 RISC-V 函數
+
+這個 Lab 將帶你實作一個簡單的加法函數，體驗 C 語言與 Assembly 的混合編程。
+
+### 實驗目標
+
+1. 理解 C 語言如何將參數傳遞給 Assembly 函數 (`a0`, `a1`)
+2. 理解 Assembly 如何將結果傳回給 C 語言 (`a0`)
+3. 觀察 Calling Convention 的實際運作
+
+### 程式碼
+
+建立一個資料夾 `lab2`，並建立以下兩個檔案：
+
+**檔案 1: `add_func.S` (Assembly 實作邏輯)**
+
+```assembly
+# add_func.S
+.section .text
+.global my_add          # 宣告 my_add 為全域符號，讓 C 語言連結器找得到
+
+# 函數原型: int my_add(int a, int b);
+# 輸入: a 在 a0, b 在 a1
+# 輸出: 結果放在 a0
+my_add:
+    # 觀察點 1: 此時 a0, a1 已經由 caller 填入數值
+    add a0, a0, a1      # 執行加法: a0 = a0 + a1
+
+    # 觀察點 2: 結果已經放在 a0
+    ret                 # 返回指令 (實際上是 jalr x0, 0(ra))
+                        # 它會跳轉到 ra 所儲存的地址
+```
+
+**檔案 2: `main.c` (C 語言驅動程式)**
+
+```c
+// main.c
+#include <stdio.h>
+
+// 宣告外部組合語言函數
+extern int my_add(int a, int b);
+
+int main() {
+    int val1 = 10;
+    int val2 = 20;
+    int sum;
+
+    printf("準備呼叫組合語言函數...\n");
+
+    // 呼叫組合語言函數
+    // 編譯器會自動將 val1 放入 a0, val2 放入 a1
+    sum = my_add(val1, val2);
+
+    printf("結果: %d + %d = %d\n", val1, val2, sum);
+
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -o lab2_add main.c add_func.S
+
+# 執行 (使用 QEMU User Mode)
+qemu-riscv64 lab2_add
+
+# 或使用 Spike + PK
+spike pk lab2_add
+```
+
+**預期輸出**：
+
+```text
+準備呼叫組合語言函數...
+結果: 10 + 20 = 30
+```
+
+---
+
+## 🛠️ 實作練習：Lab 2.2 — 分析 C 編譯出來的 Assembly
+
+這個 Lab 讓你「逆向」觀察 C 程式碼編譯後的樣子，對照 ABI 規範驗證你的理解。
+
+### 實驗目標
+
+1. 學會使用 `objdump` 反組譯
+2. 對照 ABI 識別 argument 和 return value 的 register 使用
+3. 識別 Prologue 和 Epilogue 結構
+
+### 程式碼
+
+建立 `test_abi.c`：
+
+```c
+// test_abi.c
+int calculate(int a, int b, int c) {
+    int temp = a + b;
+    return temp * c;
+}
+
+int main() {
+    return calculate(2, 3, 4);
+}
+```
+
+### 編譯與分析
+
+```bash
+# 編譯（使用 -O1 讓輸出較容易閱讀，-g 保留除錯資訊）
+riscv64-unknown-elf-gcc -O1 -c test_abi.c -o test_abi.o
+
+# 反組譯
+riscv64-unknown-elf-objdump -d test_abi.o
+```
+
+### 觀察重點
+
+你應該會看到類似這樣的輸出：
+
+```assembly
+0000000000000000 <calculate>:
+   0:   00b50533                add     a0,a0,a1    # a0 = a + b (temp)
+   4:   02c50533                mul     a0,a0,a2    # a0 = temp * c
+   8:   00008067                ret
+
+000000000000000c <main>:
+   c:   ff010113                addi    sp,sp,-16   # Prologue: 分配 stack
+  10:   00113423                sd      ra,8(sp)    # 保存 return address
+  14:   00200513                li      a0,2        # 第一個 argument
+  18:   00300593                li      a1,3        # 第二個 argument
+  1c:   00400613                li      a2,4        # 第三個 argument
+  20:   00000097                auipc   ra,0x0      # 準備呼叫
+  24:   000080e7                jalr    ra          # 呼叫 calculate
+  28:   00813083                ld      ra,8(sp)    # Epilogue: 恢復 ra
+  2c:   01010113                addi    sp,sp,16    # 釋放 stack
+  30:   00008067                ret
+```
+
+### 分析練習
+
+回答以下問題（答案在程式碼註解中）：
+
+1. **參數傳遞**：三個參數 2, 3, 4 分別放在哪些 register？
+2. **回傳值**：`calculate` 的結果放在哪個 register？
+3. **Prologue 做了什麼**：`main` 函數開頭為什麼要 `addi sp, sp, -16`？
+4. **為什麼要保存 ra**：`main` 保存了 `ra`，但 `calculate` 沒有，為什麼？
+
+> 💡 **提示**：因為 `calculate` 是 **Leaf Function**（不呼叫其他函數），所以不需要保存 `ra`。而 `main` 呼叫了 `calculate`，所以必須保存 `ra`，否則 `jalr` 會覆蓋它。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：誤用 Saved Register
+
+**錯誤情境**：在函數內隨意修改 `s0-s11` 卻沒有備份，導致回到上一層時程式崩潰。
+
+```assembly
+# ❌ 錯誤示範
+my_bad_func:
+    mv s0, a0           # 直接使用 s0，沒有保存！
+    call another_func   # 呼叫其他函數
+    mv a0, s0           # 期望 s0 還是原來的值...
+    ret                 # 但 caller 的 s0 已經被我們破壞了！
+
+# ✅ 正確示範
+my_good_func:
+    addi sp, sp, -16
+    sd s0, 0(sp)        # 先保存 s0
+    sd ra, 8(sp)        # 保存 ra (因為我們要 call)
+
+    mv s0, a0
+    call another_func
+    mv a0, s0
+
+    ld ra, 8(sp)        # 恢復 ra
+    ld s0, 0(sp)        # 恢復 s0
+    addi sp, sp, 16
+    ret
+```
+
+### 陷阱 2：混淆 x 編號與 ABI 名稱
+
+**錯誤情境**：文件說用 `a0`，但反組譯顯示 `x10`，以為是不同的東西。
+
+**解決方法**：記住對照表！
+
+| ABI 名稱 | x 編號 |
+|---------|-------|
+| a0-a7 | x10-x17 |
+| t0-t2 | x5-x7 |
+| t3-t6 | x28-x31 |
+| s0-s1 | x8-x9 |
+| s2-s11 | x18-x27 |
+| ra | x1 |
+| sp | x2 |
+
+### 陷阱 3：忘記 x0 永遠是零
+
+**錯誤情境**：試圖將值存入 x0。
+
+```assembly
+# ❌ 這行什麼都不做
+add x0, a1, a2    # 結果被丟棄，x0 永遠是 0
+
+# ✅ 如果要丟棄結果，這樣寫是合法的
+# 但如果你期望儲存結果，那就錯了！
+```
 
 ---
 

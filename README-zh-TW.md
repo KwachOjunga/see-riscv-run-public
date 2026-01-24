@@ -2,9 +2,11 @@
 
 **RISC-V 架構完整指南**
 
-**作者**：Danny Jiang
-**版本**：Draft v0p10
-**授權**：CC BY 4.0 International
+[![License](https://img.shields.io/badge/License-CC%20BY%204.0-lightgrey)](https://creativecommons.org/licenses/by/4.0/)
+[![Version](https://img.shields.io/badge/Version-Draft%20v0p11-blue)]()
+[![Author](https://img.shields.io/badge/Author-Danny%20Jiang-orange)]()
+[![Updated](https://img.shields.io/badge/Updated-Jan%202026-green)]()
+
 **語言**：[English](README.md) | 繁體中文
 
 ---
@@ -50,7 +52,9 @@
 
 **6 個附錄**：CSR 參考、Instruction Set 參考、Extension 參考、術語表、參考文獻、關於作者
 
-**總計**：約 146,600 字（約 500 頁）
+**總計**：約 160,000+ 字（約 550 頁）
+
+**v0p11 新增**：學習目標、角色對話、Hands-on Labs、常見陷阱
 
 ---
 
@@ -61,7 +65,7 @@
 - **英文版**：`manuscript/`
 - **繁體中文版**：`manuscript-zh-TW/`
 
-**目前版本**：Draft v0p10 - 2025 年 12 月
+**目前版本**：Draft v0p11 - 2026 年 1 月
 
 ---
 
@@ -126,5 +130,5 @@ Danny Jiang. (2025). See RISC-V Run: Fundamentals - RISC-V 架構完整指南.
 
 ---
 
-**最後更新**：2025 年 12 月
+**最後更新**：2026 年 1 月
 

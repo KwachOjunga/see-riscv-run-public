@@ -4,6 +4,44 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Memorize the 32 General-Purpose Registers**: Know x0-x31 and their ABI aliases (a0, s0, sp, ra...)
+2. **Understand the Calling Convention**: Master the responsibilities of Caller-saved vs Callee-saved registers
+3. **Mixed Programming Ability**: Write mixed C and Assembly code and understand how they interact
+4. **CSR Basics**: Know the purpose and access methods of Control and Status Registers
+5. **Privilege Level Concepts**: Understand the permission differences between M/S/U modes
+
+---
+
+## 💡 Scenario: Sticky Notes and the Warehouse
+
+> **Scene**: Junior's screen displays a dense wall of `objdump` output.
+
+**Junior**: "Senior, I'm losing my mind. The documentation says arguments go in `a0`, `a1`, but the disassembled code shows `x10`, `x11`. And are `x1` and `ra` even the same thing?"
+
+**Senior**: "Ha, this is a rite of passage for every newbie. The hardware only knows `x0` through `x31`—like street addresses. But to make it easier for us humans to write programs, we've established a set of 'rules' called the **ABI (Application Binary Interface)** that gives them nicknames."
+
+**Junior**: "Nicknames?"
+
+**Senior**: "Yes. Imagine you're repairing a watch. **Registers** are like the **workbench** right in front of you—limited space, only 32 parts can fit, but you can grab them instantly, super fast. **Memory** is like the **big warehouse** behind you—huge capacity but slow to fetch things."
+
+**Junior**: "So what about names like `a0`?"
+
+**Senior**: "Those are the workbench's designated zones.
+
+- **`a0-a7` (Arguments)**: The 'mail room.' Others put parts here for you to work on, and you put finished parts back here for them.
+- **`t0-t6` (Temporaries)**: The 'scratch area.' Use it however you want, toss things around—nobody cares.
+- **`s0-s11` (Saved)**: The 'reserved zone.' If you borrow this space, you must first save whatever was there, then restore it when you're done—otherwise the previous user won't find their stuff."
+
+**Junior**: "I see! What about `ra` (Return Address)?"
+
+**Senior**: "That's 'the way home.' When a function finishes, it needs to know which line of code to jump back to. Come on, let's write a program and trace the changes on this 'workbench' using a simulator."
+
+---
+
 Understanding a processor architecture begins with understanding its programmer's model: the registers, instructions, and conventions that software uses to interact with hardware. RISC-V's programmer's model is clean, regular, and designed for both simplicity and efficiency.
 
 This chapter explores the fundamental elements that every RISC-V programmer must know. We'll examine the 32 general-purpose registers and their conventional uses, the Control and Status Registers (CSRs) that manage processor state, the privilege levels that separate user code from operating system code, and the calling convention that enables functions to work together. We'll see how RISC-V's design choices—like the zero register, separate CSR address space, and clean privilege model—simplify both hardware implementation and software development.
@@ -635,6 +673,225 @@ The zero register is surprisingly useful:
 - `mv rd, rs` is `addi rd, rs, 0` or `add rd, rs, zero`
 - `li rd, imm` is `addi rd, zero, imm`
 - Discarding results: `add zero, a0, a1` (compute but discard)
+
+---
+
+## 🛠️ Hands-on Lab: Lab 2.1 — Your First RISC-V Function
+
+This lab guides you through implementing a simple addition function, experiencing mixed C and Assembly programming.
+
+### Lab Objectives
+
+1. Understand how C passes arguments to an Assembly function (`a0`, `a1`)
+2. Understand how Assembly returns results to C (`a0`)
+3. Observe the Calling Convention in action
+
+### Code
+
+Create a folder `lab2` and create the following two files:
+
+**File 1: `add_func.S` (Assembly Implementation)**
+
+```assembly
+# add_func.S
+.section .text
+.global my_add          # Declare my_add as global symbol for the linker
+
+# Function prototype: int my_add(int a, int b);
+# Input: a in a0, b in a1
+# Output: result goes in a0
+my_add:
+    # Observation point 1: a0, a1 are already filled by the caller
+    add a0, a0, a1      # Perform addition: a0 = a0 + a1
+
+    # Observation point 2: result is now in a0
+    ret                 # Return instruction (actually jalr x0, 0(ra))
+                        # It jumps to the address stored in ra
+```
+
+**File 2: `main.c` (C Driver Program)**
+
+```c
+// main.c
+#include <stdio.h>
+
+// Declare external assembly function
+extern int my_add(int a, int b);
+
+int main() {
+    int val1 = 10;
+    int val2 = 20;
+    int sum;
+
+    printf("About to call assembly function...\n");
+
+    // Call assembly function
+    // The compiler automatically puts val1 in a0, val2 in a1
+    sum = my_add(val1, val2);
+
+    printf("Result: %d + %d = %d\n", val1, val2, sum);
+
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -o lab2_add main.c add_func.S
+
+# Run (using QEMU User Mode)
+qemu-riscv64 lab2_add
+
+# Or use Spike + PK
+spike pk lab2_add
+```
+
+**Expected Output**:
+
+```text
+About to call assembly function...
+Result: 10 + 20 = 30
+```
+
+---
+
+## 🛠️ Hands-on Lab: Lab 2.2 — Analyzing Compiler-Generated Assembly
+
+This lab lets you "reverse engineer" what C code looks like after compilation, verifying your understanding against the ABI specification.
+
+### Lab Objectives
+
+1. Learn to use `objdump` for disassembly
+2. Match the ABI to identify argument and return value register usage
+3. Identify Prologue and Epilogue structures
+
+### Code
+
+Create `test_abi.c`:
+
+```c
+// test_abi.c
+int calculate(int a, int b, int c) {
+    int temp = a + b;
+    return temp * c;
+}
+
+int main() {
+    return calculate(2, 3, 4);
+}
+```
+
+### Compile and Analyze
+
+```bash
+# Compile (use -O1 for readable output, -g for debug info)
+riscv64-unknown-elf-gcc -O1 -c test_abi.c -o test_abi.o
+
+# Disassemble
+riscv64-unknown-elf-objdump -d test_abi.o
+```
+
+### What to Observe
+
+You should see output similar to:
+
+```assembly
+0000000000000000 <calculate>:
+   0:   00b50533                add     a0,a0,a1    # a0 = a + b (temp)
+   4:   02c50533                mul     a0,a0,a2    # a0 = temp * c
+   8:   00008067                ret
+
+000000000000000c <main>:
+   c:   ff010113                addi    sp,sp,-16   # Prologue: allocate stack
+  10:   00113423                sd      ra,8(sp)    # Save return address
+  14:   00200513                li      a0,2        # First argument
+  18:   00300593                li      a1,3        # Second argument
+  1c:   00400613                li      a2,4        # Third argument
+  20:   00000097                auipc   ra,0x0      # Prepare call
+  24:   000080e7                jalr    ra          # Call calculate
+  28:   00813083                ld      ra,8(sp)    # Epilogue: restore ra
+  2c:   01010113                addi    sp,sp,16    # Free stack
+  30:   00008067                ret
+```
+
+### Analysis Exercises
+
+Answer the following questions (answers are in the code comments):
+
+1. **Argument Passing**: Which registers hold the arguments 2, 3, 4?
+2. **Return Value**: Which register holds `calculate`'s result?
+3. **Prologue Purpose**: Why does `main` start with `addi sp, sp, -16`?
+4. **Why Save ra**: `main` saves `ra`, but `calculate` doesn't—why?
+
+> 💡 **Hint**: Because `calculate` is a **Leaf Function** (doesn't call other functions), it doesn't need to save `ra`. But `main` calls `calculate`, so it must save `ra`—otherwise `jalr` would overwrite it.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Misusing Saved Registers
+
+**Error Scenario**: Freely modifying `s0-s11` within a function without saving them first, causing crashes when returning to the caller.
+
+```assembly
+# ❌ Wrong
+my_bad_func:
+    mv s0, a0           # Directly use s0 without saving!
+    call another_func   # Call another function
+    mv a0, s0           # Expect s0 to be unchanged...
+    ret                 # But caller's s0 has been corrupted!
+
+# ✅ Correct
+my_good_func:
+    addi sp, sp, -16
+    sd s0, 0(sp)        # Save s0 first
+    sd ra, 8(sp)        # Save ra (since we're calling)
+
+    mv s0, a0
+    call another_func
+    mv a0, s0
+
+    ld ra, 8(sp)        # Restore ra
+    ld s0, 0(sp)        # Restore s0
+    addi sp, sp, 16
+    ret
+```
+
+### Pitfall 2: Forgetting to Save ra in Non-Leaf Functions
+
+**Error Scenario**: A function calls another function but forgets to save `ra`, losing the return address.
+
+```assembly
+# ❌ Wrong
+my_func:
+    call helper         # jalr writes to ra, overwriting original!
+    ret                 # Now ra points to wrong location
+
+# ✅ Correct
+my_func:
+    addi sp, sp, -16
+    sd ra, 8(sp)        # Save ra before calling
+    call helper
+    ld ra, 8(sp)        # Restore ra
+    addi sp, sp, 16
+    ret
+```
+
+### Pitfall 3: Stack Misalignment
+
+**Error Scenario**: The RISC-V calling convention requires 16-byte stack alignment. Violating this can cause crashes or subtle bugs.
+
+```assembly
+# ❌ Wrong: 8-byte allocation (misaligned!)
+    addi sp, sp, -8
+
+# ✅ Correct: Always use multiples of 16
+    addi sp, sp, -16
+```
+
+> **danieRTOS Reference**: The Context Switch implementation in danieRTOS carefully follows these conventions, saving all callee-saved registers before switching tasks.
 
 ---
 

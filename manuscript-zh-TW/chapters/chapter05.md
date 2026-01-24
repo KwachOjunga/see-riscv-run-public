@@ -4,6 +4,55 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 VA 到 PA 的轉換**：掌握 Virtual Address 如何透過 Page Table 轉換為 Physical Address
+2. **掌握 Sv39 結構**：明白三級 Page Table 的層次 (L2 → L1 → L0)
+3. **設定 `satp` CSR**：能夠計算並設置 `satp` 以開啟 MMU
+4. **理解 TLB 機制**：明白 TLB 如何加速位址轉換及其 flush 時機
+5. **處理 Page Fault**：能夠分析 Page Fault 的原因並理解處理流程
+
+---
+
+## 💡 情境引入：圖書館的索書號
+
+> **場景**：小華在除錯一個多程序的系統，看著 GDB 顯示的記憶體位址，越看越困惑。
+
+**小華**：「陳教授，我遇到一個很奇怪的事。我同時跑兩個程式，用 GDB 去看它們的記憶體，發現兩個程式都在用 `0x10000` 這個位址！但裡面的資料完全不一樣。這怎麼可能？難道 CPU 是量子電腦嗎？」
+
+**陳教授**：「哈哈，這可不是量子糾纏。你有去過圖書館嗎？」
+
+**小華**：「有啊，這跟圖書館有什麼關係？」
+
+**陳教授**：「想像一下。你在 A 分館，根據索書號 `Q123` 找到一本書，是《量子力學導論》。你朋友在 B 分館，用同樣的索書號 `Q123`，找到的卻是《微積分習題集》。」
+
+**小華**：「因為每個分館有自己的書架配置？」
+
+**陳教授**：「完全正確！
+
+1. **索書號 (Virtual Address)**：程式看到的位址，就像索書號。每個程式都覺得自己有一整座圖書館。
+2. **實際書架位置 (Physical Address)**：書真正放在哪裡。
+3. **索書目錄 (Page Table)**：將索書號翻譯成實際書架位置的對照表。
+4. **分館 (Process)**：每個分館有自己的索書目錄。」
+
+**小華**：「所以兩個程式用同一個虛擬位址，但透過不同的 Page Table，翻譯成不同的實體位址？」
+
+**陳教授**：「你悟了！這就是 **Virtual Memory** 的精髓。作業系統為每個 Process 準備了專屬的索書目錄 (Page Table)，讓它們以為自己獨佔整座圖書館，實際上大家的書都擠在同一個倉庫裡。這樣的好處是：
+
+- **隔離 (Isolation)**：程式 A 翻錯書不會影響程式 B。
+- **保護 (Protection)**：有些書架標示『僅限員工』，你沒權限就不能碰。
+- **彈性 (Flexibility)**：書可以隨時搬動位置，只要更新索書目錄就好。」
+
+**小華**：「那 `satp` 這個 CSR 是幹嘛的？」
+
+**陳教授**：「`satp` 就是告訴 CPU：『現在使用哪一份索書目錄 (Page Table)，從哪裡開始翻。』當作業系統切換 Process 時，它會更新 `satp`，讓 CPU 去查另一份目錄。」
+
+**小華**：「懂了！那我們來試試看怎麼建立這個索書目錄？」
+
+---
+
 Virtual memory 是現代計算中最重要的抽象之一。它提供記憶體保護，將 process 彼此隔離，也與作業系統隔離。它提供 address space 抽象，讓每個 process 看到簡單、連續的記憶體視圖，無論實體佈局如何。它支援 memory overcommitment，允許系統執行比實體 RAM 容量更多的程式。它還支援 shared memory，實現高效的通訊和資源共享。
 
 RISC-V 透過簡潔、靈活的 paging system 實作 virtual memory。Sv39 提供 39-bit virtual address（512 GB address space）和 three-level page table，適合大多數 application processor。Sv48 將其擴展到 48-bit virtual address（256 TB address space）和 four-level page table，適用於需要更大 address space 的系統。兩種模式都支援 superpage（2 MB 和 1 GB page），以減少 TLB pressure 並高效映射大型區域。
@@ -703,6 +752,208 @@ void handle_tlb_flush_ipi(uint64_t va, uint64_t asid) {
     // 發送確認
     send_ipi_ack();
 }
+```
+
+---
+
+## 🛠️ 實作練習：Lab 5.1 — 戴上魔術眼鏡 (Enable Paging)
+
+這個 Lab 將帶你建立最簡單的 Page Table：Identity Mapping（虛擬位址 = 實體位址），並開啟 MMU。
+
+### 實驗目標
+
+1. 理解 Sv39 的 Page Table Entry (PTE) 結構
+2. 建立一個 Identity Mapping 的 Page Table
+3. 設定 `satp` CSR 並開啟 MMU
+4. 理解 `sfence.vma` 的作用
+
+### 概念說明
+
+在 Sv39 模式下，Page Table 有三級：
+
+```
+Virtual Address (39-bit):
++--------+--------+--------+------------+
+| VPN[2] | VPN[1] | VPN[0] |   Offset   |
+|  9-bit |  9-bit |  9-bit |   12-bit   |
++--------+--------+--------+------------+
+
+Page Table Walk:
+  satp.PPN → Level 2 Table → Level 1 Table → Level 0 Table → Physical Page
+```
+
+每個 Page Table Entry (PTE) 為 64-bit：
+
+```
+PTE 格式:
++-----------------------------------------------+-------+
+|             PPN (44-bit)                      | Flags |
+|                                               | RWXUG |
++-----------------------------------------------+-------+
+  63                                    10  9       0
+
+Flags:
+  V (Valid)     - bit 0: Entry 是否有效
+  R (Read)      - bit 1: 可讀
+  W (Write)     - bit 2: 可寫
+  X (Execute)   - bit 3: 可執行
+  U (User)      - bit 4: User mode 可存取
+  G (Global)    - bit 5: 全域映射
+  A (Accessed)  - bit 6: 已被存取
+  D (Dirty)     - bit 7: 已被寫入
+```
+
+### 程式碼
+
+建立 `lab5_paging.c`：
+
+```c
+// lab5_paging.c - 最小化 Identity Mapping 示範
+#include <stdint.h>
+
+// PTE Flag 定義
+#define PTE_V   (1 << 0)  // Valid
+#define PTE_R   (1 << 1)  // Read
+#define PTE_W   (1 << 2)  // Write
+#define PTE_X   (1 << 3)  // Execute
+#define PTE_U   (1 << 4)  // User
+#define PTE_A   (1 << 6)  // Accessed
+#define PTE_D   (1 << 7)  // Dirty
+
+// Sv39: 512 entries per page table (9-bit index)
+#define PAGE_SIZE     4096
+#define PTE_PER_PAGE  512
+
+// Page Table (需 4KB 對齊)
+__attribute__((aligned(PAGE_SIZE)))
+uint64_t root_page_table[PTE_PER_PAGE];
+
+// 簡化：我們用 1GB 大頁 (Gigapage) 進行 Identity Mapping
+// VPN[2] = 0 → PA 0x0000_0000 ~ 0x3FFF_FFFF (1GB)
+// VPN[2] = 1 → PA 0x4000_0000 ~ 0x7FFF_FFFF (1GB)
+
+void setup_identity_mapping(void) {
+    // 清空 Page Table
+    for (int i = 0; i < PTE_PER_PAGE; i++) {
+        root_page_table[i] = 0;
+    }
+
+    // 建立 Identity Mapping (前 4GB，使用 1GB 大頁)
+    // 這是 Leaf PTE: RWX bits 都設，代表這是最終映射
+    for (int i = 0; i < 4; i++) {
+        uint64_t pa = (uint64_t)i << 30;  // 每個 entry 映射 1GB
+        uint64_t ppn = pa >> 12;          // PPN = PA >> 12
+        root_page_table[i] = (ppn << 10) | PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
+    }
+}
+
+void enable_paging(void) {
+    uint64_t root_ppn = ((uint64_t)root_page_table) >> 12;
+
+    // satp 格式: MODE (4-bit) | ASID (16-bit) | PPN (44-bit)
+    // MODE = 8 (Sv39)
+    uint64_t satp_val = (8ULL << 60) | root_ppn;
+
+    // 設定 satp
+    asm volatile("csrw satp, %0" : : "r"(satp_val));
+
+    // 刷新 TLB
+    asm volatile("sfence.vma");
+}
+```
+
+### 編譯與執行
+
+```bash
+# 此 Lab 需要配合 Bare-metal 啟動程式
+# 通常整合到 Chapter 9 的 Boot Lab 中使用
+
+# 如果只是觀察 Page Table 結構，可以用 QEMU + GDB：
+# 編譯
+riscv64-unknown-elf-gcc -O0 -g -c lab5_paging.c -o lab5_paging.o
+
+# 在 GDB 中檢視 Page Table 內容
+(gdb) x/8gx &root_page_table
+```
+
+### 手算練習：Address Translation Drill
+
+給定一個 Sv39 Virtual Address：`0x0000_0040_1234_5678`
+
+請手動拆解：
+
+1. **VPN[2]** = 第 38-30 bit = ?
+2. **VPN[1]** = 第 29-21 bit = ?
+3. **VPN[0]** = 第 20-12 bit = ?
+4. **Offset** = 第 11-0 bit = ?
+
+<details>
+<summary>點擊查看答案</summary>
+
+```
+VA = 0x0000_0040_1234_5678
+   = 0b 0000...0001 000000001 000100011 010001010110 01111000
+
+VPN[2] = bits 38-30 = 0x001 = 1
+VPN[1] = bits 29-21 = 0x009 = 9
+VPN[0] = bits 20-12 = 0x234 = 564
+Offset = bits 11-0  = 0x678 = 1656
+```
+
+**Translation 過程**：
+1. 從 `satp.PPN` 找到 Root Table (Level 2)
+2. 用 VPN[2]=1 索引，找到 Level 1 Table 的 PPN
+3. 用 VPN[1]=9 索引，找到 Level 0 Table 的 PPN
+4. 用 VPN[0]=564 索引，找到最終 Physical Page 的 PPN
+5. Physical Address = (PPN << 12) | Offset
+
+</details>
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：Page Table 沒有對齊
+
+**錯誤情境**：Page Table 沒有 4KB 對齊，導致 `satp` 計算出錯誤的 PPN。
+
+```c
+// ❌ 錯誤：沒有對齊
+uint64_t page_table[512];  // 可能不是 4KB 對齊！
+
+// ✅ 正確：強制 4KB 對齊
+__attribute__((aligned(4096)))
+uint64_t page_table[512];
+```
+
+### 陷阱 2：忘記刷新 TLB
+
+**錯誤情境**：修改了 Page Table 但沒有執行 `sfence.vma`，CPU 繼續使用舊的 TLB 快取。
+
+```c
+// ❌ 錯誤：修改後忘記刷新
+page_table[index] = new_pte;
+// CPU 可能還在用舊的映射！
+
+// ✅ 正確：修改後刷新 TLB
+page_table[index] = new_pte;
+asm volatile("sfence.vma");  // 告訴 CPU：Page Table 變了，請清除快取
+```
+
+### 陷阱 3：混淆 Leaf PTE 與 Non-Leaf PTE
+
+**錯誤情境**：在中間層級設定了 RWX 位元，變成意外的大頁映射。
+
+```c
+// PTE 類型判斷規則：
+// - RWX 都是 0：Non-Leaf (指向下一級 Page Table)
+// - RWX 至少有一個是 1：Leaf (最終映射)
+
+// ❌ 錯誤：Level 2 PTE 設了 R bit，變成 1GB 大頁！
+level2_pte = (next_table_ppn << 10) | PTE_V | PTE_R;  // 意外變成 Leaf
+
+// ✅ 正確：Non-Leaf PTE 只設 V bit
+level2_pte = (next_table_ppn << 10) | PTE_V;  // 正確的 Non-Leaf
 ```
 
 ---

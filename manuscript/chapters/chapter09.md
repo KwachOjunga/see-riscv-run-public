@@ -4,6 +4,42 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand the Reset Vector**: Know where the first instruction executes after RISC-V powers on
+2. **Master the Boot Flow**: Understand the relay from BootROM → Loader → Firmware → OS
+3. **Write Linker Scripts**: Define your program's memory layout
+4. **Implement Bare-metal Programs**: Control hardware directly without an OS
+5. **Understand UART MMIO**: Output characters through Memory-Mapped I/O
+
+---
+
+## 💡 Scenario: The First Leg of the Relay Race
+
+> **Scene**: Junior presses the Reset button on the development board, watching logs scroll across the terminal.
+
+**Junior**: "Architect, when we write C, we always start from `main()`. But when the CPU just powers on, RAM should be empty, right? Where does the CPU get its first instruction?"
+
+**Architect**: "Great question. It's like a relay race—`main()` is actually the third or fourth leg.
+
+1. **First Leg (Reset Vector)**: The CPU hardware is designed so that after power-on, the PC (Program Counter) automatically points to a fixed location (usually ROM). There, a small hardcoded program (BootROM) lives.
+
+2. **Second Leg (Loader)**: BootROM's job is simple—copy the next program (like OpenSBI or U-Boot) from storage (Flash/SD card) into RAM, then jump to it.
+
+3. **Third Leg (Firmware/OS)**: Now the environment is more comfortable—we have RAM available, and we can finally prepare to run your `main()`."
+
+**Junior**: "Can we skip all that complex OS stuff and directly be that 'second leg of the relay,' controlling the hardware ourselves?"
+
+**Architect**: "Absolutely—that's called **Bare-metal programming**. In this world, there's no `printf`, no `malloc`, not even a Stack unless you set it up yourself. Let's try sending our first shout into this 'wilderness.'"
+
+**Junior**: "Sounds exciting!"
+
+**Architect**: "But here's the key: before entering C code, you must set up the Stack Pointer (SP). C function calls depend on the Stack—jumping into C without setting SP will crash immediately."
+
+---
+
 What happens when you power on a RISC-V system? Unlike application software that runs in a well-prepared environment, the boot process starts from nothing—no operating system, no memory initialization, not even a stack. This chapter explores how RISC-V systems bootstrap themselves from power-on reset to a running operating system.
 
 The boot process is a carefully orchestrated sequence of firmware stages, each preparing the environment for the next. We'll trace this journey from the reset vector through machine-mode firmware (ZSBL, FSBL, OpenSBI), bootloaders (U-Boot, GRUB), and finally to the operating system handoff. Understanding this process is essential for firmware developers, system integrators, and anyone debugging boot issues.
@@ -690,6 +726,208 @@ start_kernel() (init/main.c)
 - Built-in secure/non-secure separation
 
 **RISC-V's philosophy**: Keep M-mode minimal, push complexity to S-mode. ARM's philosophy: Rich firmware layer with extensive security features.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 9.2 — Survival in the Wilderness (Bare-metal Hello World)
+
+This is the most "pure" programming experience of your career. We'll strip away all OS protections and talk directly to hardware.
+
+### Lab Objectives
+
+1. Write a Linker Script to define memory layout
+2. Write Assembly startup code to set the Stack Pointer
+3. Use MMIO to directly control UART output
+4. Run on QEMU
+
+### Project Structure
+
+Create a folder `lab9` with three files:
+
+```text
+lab9/
+├── link.ld    # Map: defines memory layout
+├── entry.S    # Startup key: set SP and jump to main
+└── main.c     # Logic brain: UART driver
+```
+
+### Code
+
+**File 1: `link.ld` (Linker Script)**
+
+Tell the Linker: our program starts at RAM's beginning (`0x80000000`).
+
+```ld
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
+
+SECTIONS
+{
+  /* QEMU virt machine RAM starts at 0x80000000 */
+  . = 0x80000000;
+
+  /* Text section: put startup code first */
+  .text : {
+    *(.text.boot)
+    *(.text)
+  }
+
+  /* Data section */
+  .data : { *(.data) }
+
+  /* Uninitialized data section (BSS) */
+  .bss : { *(.bss) }
+
+  /* Define Stack Top, reserve 4KB */
+  . = . + 0x1000;
+  _stack_top = .;
+}
+```
+
+**File 2: `entry.S` (Startup Code)**
+
+This is the first code the CPU executes.
+
+```assembly
+.section .text.boot
+.global _start
+
+_start:
+    # 1. Disable interrupts (good practice, usually off at boot anyway)
+    csrw mie, zero
+
+    # 2. Set Stack Pointer (SP)
+    #    C function calls depend on Stack—jumping into C without SP crashes
+    la sp, _stack_top
+
+    # 3. Jump to C main function
+    call main
+
+    # 4. If main returns (shouldn't happen), loop forever
+loop:
+    j loop
+```
+
+**File 3: `main.c` (UART Driver)**
+
+QEMU `virt` machine UART0 is fixed at `0x10000000`.
+
+```c
+#include <stdint.h>
+
+// QEMU virt UART base address
+#define UART0_BASE 0x10000000
+
+// Define a pointer to this address
+// volatile is crucial! Tells compiler not to optimize away reads/writes
+volatile uint8_t *uart0 = (uint8_t *)(UART0_BASE);
+
+void put_char(char c) {
+    // Write character directly to memory address
+    // UART controller transmits it
+    *uart0 = c;
+}
+
+void print_str(const char *s) {
+    while (*s) {
+        put_char(*s++);
+    }
+}
+
+int main(void) {
+    print_str("Hello from Bare-metal RISC-V!\n");
+
+    // Loop forever (no OS to return to)
+    while (1) {}
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -T link.ld \
+    -o bare_hello entry.S main.c
+
+# Run on QEMU (M-mode, no firmware)
+qemu-system-riscv64 -machine virt -nographic -bios none -kernel bare_hello
+```
+
+**Expected Output**:
+
+```
+Hello from Bare-metal RISC-V!
+```
+
+(Press Ctrl+A, then X to exit QEMU)
+
+### What You Just Did
+
+You've written a complete bare-metal program:
+
+1. **Linker Script**: Defined where code and stack live in memory
+2. **Startup Code**: Set SP and jumped to C—the essential bootstrap
+3. **UART MMIO**: Talked directly to hardware using memory-mapped I/O
+
+> **danieRTOS Reference**: The danieRTOS entry point follows the same pattern—`entry.S` sets up SP and calls `kernel_main()`.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Forgetting the Stack Pointer
+
+**Error Scenario**: Jumping directly from Assembly to C's `main()` without setting `sp`.
+
+**Consequence**: Program crashes as soon as it enters a C function, because C needs the Stack for local variables and return addresses.
+
+```assembly
+# ❌ Wrong: Forgot to set SP
+_start:
+    call main    # Jump into C with garbage sp—certain death
+
+# ✅ Correct: Set SP first
+_start:
+    la sp, _stack_top
+    call main
+```
+
+### Pitfall 2: Linker Script Section Order
+
+**Error Scenario**: Not placing `.text.boot` at the beginning.
+
+**Consequence**: CPU starts executing at `0x80000000`, but that's not `_start`—it's some other function's code, causing unpredictable behavior.
+
+```ld
+/* ❌ Wrong: .text.boot not first */
+.text : {
+    *(.text)       /* Other code comes in first */
+    *(.text.boot)  /* _start pushed to later */
+}
+
+/* ✅ Correct: Ensure .text.boot is first */
+.text : {
+    *(.text.boot)  /* Startup code goes first */
+    *(.text)
+}
+```
+
+### Pitfall 3: Hardcoding UART Address
+
+**Error Scenario**: Hardcoding `0x10000000` in your program, then running it on a different board.
+
+**Consequence**: Different hardware has different memory maps—UART address may be completely different.
+
+```c
+// ❌ Problem: Hardcoded address, not portable
+#define UART0_BASE 0x10000000
+
+// ✅ Better: Use Device Tree or header definitions
+// Or use SBI (next chapter)
+```
+
+> 💡 **Tip**: This is why we need **SBI (Supervisor Binary Interface)**—it provides a standardized interface so you don't have to worry about hardware differences. Next chapter, we'll learn how to output characters through SBI instead of directly manipulating UART.
 
 ---
 

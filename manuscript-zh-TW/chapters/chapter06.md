@@ -4,6 +4,68 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解亂序執行**：明白為什麼 CPU 會重新排序記憶體存取
+2. **掌握 RVWMO**：理解 RISC-V Weak Memory Ordering 的基本規則
+3. **使用 Fence 指令**：知道何時需要使用 `fence` 強制排序
+4. **實作 Spinlock**：能夠使用 `amoswap` 或 `lr/sc` 實作互斥鎖
+5. **避免 Data Race**：識別並修正多核心程式中的競爭條件
+
+---
+
+## 💡 情境引入：物流中心的出貨邏輯
+
+> **場景**：小華寫了一個雙核心程式，Core 0 寫入資料，Core 1 讀取，但結果總是亂七八糟。
+
+**小華**：「阿杰，我快瘋了！我的程式邏輯是對的，但跑出來的結果像是亂數。」
+
+**阿杰**：「Show me the code。」
+
+**小華**：（展示螢幕）
+
+```c
+// Core 0                    // Core 1
+data = 42;                   while (flag == 0) {}
+flag = 1;                    print(data);  // 預期是 42
+```
+
+「按邏輯，Core 1 應該會等到 `flag` 變成 1 才會印出 `data`，那時候 `data` 早就是 42 了吧？但有時候印出來的是 0！」
+
+**阿杰**：「你把 CPU 想得太忠厚老實了。現代 CPU 像是物流中心的經理——為了效率，他會『偷偷調整出貨順序』。」
+
+**小華**：「什麼意思？」
+
+**阿杰**：「想像你是物流經理。有兩個包裹要寄：
+
+1. 包裹 A：寄到台北（遠）
+2. 包裹 B：寄到新竹（近）
+
+你會怎麼出貨？」
+
+**小華**：「先寄新竹的吧，反正比較快。」
+
+**阿杰**：「Bingo！CPU 也是這樣想的。它看到 `data = 42` 和 `flag = 1` 兩個 store，發現 `flag` 的地址已經在 cache 裡了，`data` 還得等記憶體，就先把 `flag` 寫出去了。」
+
+**小華**：「所以 Core 1 看到 `flag == 1`，但 `data` 還沒寫入？」
+
+**阿杰**：「正是。這就是 **Memory Reordering**。解法是用 **Fence** 指令告訴 CPU：『這裡不准偷跑！前面的 store 都要完成，才能執行後面的 store。』」
+
+```c
+// Core 0 (修正版)
+data = 42;
+__sync_synchronize();  // 編譯成 fence iorw, iorw
+flag = 1;
+```
+
+**小華**：「原來如此！那 `amoswap` 這些原子指令呢？」
+
+**阿杰**：「那是另一個問題：『如何確保搶廁所時不會兩個人同時進去？』這就是 Spinlock 要解決的。」
+
+---
+
 現代處理器會 out-of-order 執行指令、重新排序記憶體存取、並使用 cache 來延遲 write 對其他處理器的可見性。這些最佳化對效能至關重要，但它們造成了一個基本問題：當多個處理器存取 shared memory 時，程式實際上意味著什麼？沒有仔細的同步，程式可能會觀察到不可能的行為，其中效果似乎以錯誤的順序發生。
 
 RISC-V 透過 memory consistency model 來解決這個問題，該模型定義了哪些記憶體存取順序是合法的，以及在需要時強制執行順序的同步 primitive。RISC-V Weak Memory Ordering (RVWMO) model 允許積極的重新排序以提高效能，同時提供 fence instruction 和 atomic operation 在需要時強制執行順序。理解 memory ordering 對於任何撰寫 concurrent code、實作同步 primitive、或最佳化 multi-threaded application 的人都至關重要。
@@ -808,6 +870,201 @@ Memory ordering bug 非常難以 debug：
 - 仔細審查同步 code
 
 RISC-V memory model 是正式指定的，這允許使用 formal verification tool 來證明正確性。
+
+---
+
+## 🛠️ 實作練習：Lab 6.1 — 搶廁所大戰 (Spinlock)
+
+這個 Lab 將帶你使用 `amoswap` 指令實作一個 Spinlock，保護共享變數不被多核心同時存取。
+
+### 實驗目標
+
+1. 理解為什麼單純的讀-改-寫操作會造成 Race Condition
+2. 使用 `amoswap` (Atomic Memory Operation Swap) 實作 Spinlock
+3. 理解 acquire/release 語義
+
+### 概念說明
+
+**為什麼需要原子操作？**
+
+考慮這個「天真」的 lock 實作：
+
+```c
+// ❌ 錯誤的 lock 實作
+void lock_acquire(int *lock) {
+    while (*lock == 1) {}  // (1) 讀取：檢查鎖是否被佔用
+    *lock = 1;              // (2) 寫入：佔用鎖
+}
+```
+
+問題：步驟 (1) 和 (2) 不是原子的！
+
+```
+時間 →
+Core 0: 讀取 lock=0 ─────────────────────── 寫入 lock=1
+Core 1: ─────────────── 讀取 lock=0 ─────── 寫入 lock=1
+         ↑ 兩個 Core 都以為自己拿到鎖了！
+```
+
+**amoswap 的作用**
+
+`amoswap` 將「讀取舊值」和「寫入新值」合成一個原子操作：
+
+```assembly
+# amoswap.w.aq rd, rs2, (rs1)
+# 原子地執行：
+#   temp = memory[rs1]
+#   memory[rs1] = rs2
+#   rd = temp
+```
+
+### 程式碼
+
+建立 `lab6_spinlock.S`：
+
+```assembly
+# lab6_spinlock.S - 使用 amoswap 實作 Spinlock
+.section .text
+.global spinlock_acquire
+.global spinlock_release
+
+# void spinlock_acquire(int *lock)
+# a0 = lock 的地址
+spinlock_acquire:
+    li t0, 1                    # t0 = 1 (LOCKED 狀態)
+spin:
+    # amoswap.w.aq: Atomic swap with acquire 語義
+    # 原子地：舊值 → t1, 新值 1 → memory[a0]
+    amoswap.w.aq t1, t0, (a0)
+
+    # 檢查舊值是否為 0 (UNLOCKED)
+    bnez t1, spin               # 如果舊值不是 0，繼續自旋
+
+    ret                         # 成功獲取鎖！
+
+# void spinlock_release(int *lock)
+# a0 = lock 的地址
+spinlock_release:
+    # amoswap.w.rl: Atomic swap with release 語義
+    # 將 0 (UNLOCKED) 寫入 lock
+    li t0, 0
+    amoswap.w.rl zero, t0, (a0)  # 結果丟棄（寫入 zero）
+
+    ret
+```
+
+**C 語言驅動程式** `main.c`：
+
+```c
+#include <stdio.h>
+
+extern void spinlock_acquire(int *lock);
+extern void spinlock_release(int *lock);
+
+int shared_counter = 0;
+int lock = 0;
+
+void increment_safely(void) {
+    spinlock_acquire(&lock);
+
+    // Critical Section: 受保護的區域
+    shared_counter++;
+
+    spinlock_release(&lock);
+}
+
+int main() {
+    printf("Lock = %d, Counter = %d\n", lock, shared_counter);
+
+    increment_safely();
+    increment_safely();
+    increment_safely();
+
+    printf("Counter after 3 increments: %d\n", shared_counter);
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -o lab6_spinlock main.c lab6_spinlock.S
+
+# 執行
+qemu-riscv64 lab6_spinlock
+# 或
+spike pk lab6_spinlock
+```
+
+**預期輸出**：
+
+```text
+Lock = 0, Counter = 0
+Counter after 3 increments: 3
+```
+
+### 關鍵思考題
+
+> 💭 **為什麼需要 `.aq` (acquire) 和 `.rl` (release) 後綴？**
+>
+> - **Acquire (`.aq`)**：確保「取得鎖之後的所有讀寫」不會被重排到「取得鎖之前」。保護 Critical Section 的開頭。
+> - **Release (`.rl`)**：確保「釋放鎖之前的所有讀寫」不會被重排到「釋放鎖之後」。保護 Critical Section 的結尾。
+>
+> 沒有這些語義，CPU 可能會把 Critical Section 內的操作「偷跑」到鎖外面！
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：混淆 `volatile` 與 Memory Barrier
+
+**錯誤情境**：以為 `volatile` 可以解決多核心同步問題。
+
+```c
+// ❌ 錯誤：volatile 只防止編譯器優化，不影響 CPU 重排序
+volatile int flag = 0;
+data = 42;
+flag = 1;  // CPU 可能還是會先執行這行！
+
+// ✅ 正確：需要 memory barrier
+data = 42;
+__sync_synchronize();  // 或 asm volatile("fence rw, rw")
+flag = 1;
+```
+
+### 陷阱 2：自旋鎖中使用普通 load/store
+
+**錯誤情境**：沒有使用原子指令，導致兩個核心同時進入 Critical Section。
+
+```c
+// ❌ 錯誤：非原子操作
+void bad_lock(int *lock) {
+    while (*lock) {}  // 讀取
+    *lock = 1;        // 寫入 — 這兩步之間可能被打斷！
+}
+
+// ✅ 正確：使用原子操作
+void good_lock(int *lock) {
+    while (__sync_lock_test_and_set(lock, 1)) {}  // 編譯成 amoswap
+}
+```
+
+### 陷阱 3：忘記 acquire/release 語義
+
+**錯誤情境**：使用了原子操作但沒有正確的 ordering。
+
+```assembly
+# ❌ 錯誤：沒有 .aq，critical section 的讀取可能被提前
+amoswap.w t1, t0, (a0)      # 沒有 .aq
+
+# ❌ 錯誤：沒有 .rl，critical section 的寫入可能被延後
+amoswap.w zero, t0, (a0)    # 沒有 .rl
+
+# ✅ 正確：acquire 取得鎖，release 釋放鎖
+amoswap.w.aq t1, t0, (a0)   # acquire
+amoswap.w.rl zero, t0, (a0) # release
+```
 
 ---
 

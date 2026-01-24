@@ -4,6 +4,66 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 Pipeline 概念**：明白為什麼 Pipeline 能提升 throughput
+2. **掌握 5-Stage Pipeline**：熟悉 IF, ID, EX, MEM, WB 各階段的功能
+3. **識別 Hazard 類型**：區分 Structural, Data, Control 三種 Hazard
+4. **理解解決方案**：掌握 Stalling, Forwarding, Branch Prediction 的原理
+5. **分析 Pipeline 效能**：能夠計算 CPI (Cycles Per Instruction) 的影響因素
+
+---
+
+## 💡 情境引入：工廠流水線的智慧
+
+> **場景**：小華參觀了王工的半導體工廠，對生產線的運作方式感到好奇。
+
+**小華**：「王工，我一直有個疑問。課本說 CPU 一個 cycle 執行一條指令，但我看每條指令要經過取指、解碼、執行、存取記憶體、寫回這五個步驟，怎麼可能一個 cycle 就完成？」
+
+**王工**：「好問題。來，跟我到工廠看看。」
+
+（兩人走到生產線旁）
+
+**王工**：「你看這條組裝線。每個工作站只做一件事：
+
+1. **第一站**：拿零件 (Fetch)
+2. **第二站**：檢查規格 (Decode)
+3. **第三站**：組裝 (Execute)
+4. **第四站**：品檢 (Memory)
+5. **第五站**：包裝 (Writeback)
+
+每個產品要經過五站才完成。如果每一站要 1 分鐘，做一個產品要 5 分鐘對吧？」
+
+**小華**：「對啊。」
+
+**王工**：「但你看現在產線上有幾個產品在同時處理？」
+
+**小華**：「五個！每一站都有一個。」
+
+**王工**：「沒錯。雖然每個產品要 5 分鐘才完成，但產線 **每分鐘都有一個產品完成出貨**。這就是 **Pipeline** 的威力——**Throughput**（產出率）是每 cycle 一條指令，即使 **Latency**（單條指令延遲）是五個 cycle。」
+
+**小華**：「原來如此！那如果有一站卡住了呢？」
+
+**王工**：「這就是 **Hazard**（危害）。想像第三站的螺絲起子壞了——
+
+- **Structural Hazard（結構危害）**：工具不夠用，兩個產品搶同一把起子。
+- **Data Hazard（資料危害）**：第三站需要第五站的零件，但那個產品還沒做完。
+- **Control Hazard（控制危害）**：接到電話說『停！換做另一個型號！』，前面做到一半的產品全部報廢。」
+
+**小華**：「那怎麼解決？」
+
+**王工**：「三招：
+
+1. **Stall（暫停）**：讓產線停下來等，但這會降低 throughput。
+2. **Forwarding（轉發）**：第三站的結果不用等到第五站包裝好，直接從旁邊遞過去。
+3. **Prediction（預測）**：先猜老闆要什麼型號，猜對了繼續做，猜錯了再拆掉重來。」
+
+**小華**：「明白了！那我們來看看 CPU 是怎麼處理這些情況的。」
+
+---
+
 Pipeline 是現代處理器設計的核心。它是允許處理器同時處理多條指令的機制，大幅提高 throughput。在本章中，我們將探討 RISC-V 處理器如何實作 pipelining，從經典的 five-stage pipeline 到處理 hazard 和 branch 的進階技術。
 
 理解 pipeline 對於任何使用 RISC-V 的人都至關重要，無論你是設計硬體、撰寫編譯器，還是最佳化效能關鍵的 code。RISC-V 設計的美妙之處在於其乾淨、規則的 instruction set 使其特別適合高效的 pipeline 實作。我們將檢視經典的 five-stage pipeline（Fetch、Decode、Execute、Memory、Writeback）、破壞 pipeline flow 的三種 hazard（structural、data、control）、以及處理它們的技術（forwarding、stalling、branch prediction）。我們還將探討 pipeline depth 如何影響效能和複雜性。
@@ -627,6 +687,150 @@ Superscalar processor 更複雜，但可以達到更高的 IPC。4-issue supersc
 - **Shallow pipeline**（更少 stage）有更低的 misprediction penalty 和更簡單的 control，但更低的最大 frequency。
 
 現代處理器平衡這些權衡。RISC-V core 範圍從 3-stage pipeline（簡單的 embedded core）到 10+ stage pipeline（高效能 core）。
+
+---
+
+## 🛠️ 實作練習：Lab 7.1 — Pipeline Bubble 分析
+
+這個 Lab 是紙筆練習，帶你分析真實的組合語言程式碼中的 Pipeline Hazard，並畫出 Pipeline Diagram。
+
+### 實驗目標
+
+1. 識別程式碼中的 Data Hazard
+2. 畫出 Pipeline Timing Diagram
+3. 計算 Stall Cycles 與實際 CPI
+4. 理解 Forwarding 如何減少 Stall
+
+### 分析範例
+
+考慮以下 RISC-V 組合語言：
+
+```assembly
+    lw   x1, 0(x2)      # I1: Load x1 from memory
+    add  x3, x1, x4     # I2: x3 = x1 + x4 (依賴 I1 的結果)
+    sub  x5, x3, x6     # I3: x5 = x3 - x6 (依賴 I2 的結果)
+    and  x7, x5, x8     # I4: x7 = x5 & x8 (依賴 I3 的結果)
+```
+
+### 練習 1：無 Forwarding 的 Pipeline
+
+假設沒有 Forwarding，結果必須在 WB 階段寫回後，才能被下一條指令在 ID 階段讀取。
+
+**畫出 Pipeline Diagram**：
+
+```
+Cycle:   1    2    3    4    5    6    7    8    9   10   11   12
+I1 (lw): IF   ID   EX   MEM  WB
+I2 (add):     IF   ID   --   --   --   ID   EX   MEM  WB
+                   ↑ stall 3 cycles (等待 x1 ready)
+I3 (sub):               IF   --   --   --   IF   ID   --   --   ...
+I4 (and):                                        IF   ID   ...
+```
+
+**計算**：
+- 理想情況：4 條指令 × 1 cycle = 4 cycles
+- 實際情況：因 Hazard 產生多次 stall
+- 真實 CPI > 1
+
+### 練習 2：有 Forwarding 的 Pipeline
+
+有了 Forwarding，EX 或 MEM 階段的結果可以直接「轉發」給下一條指令使用。
+
+**思考題**：
+
+1. `lw` 的結果最早在哪個階段可用？（提示：MEM 階段結束時）
+2. `add` 需要 `x1` 的值在哪個階段？（提示：EX 階段開始時）
+3. 即使有 Forwarding，`lw` 後接 `add` 還是需要 stall 嗎？
+
+<details>
+<summary>點擊查看答案</summary>
+
+1. `lw` 的結果在 **MEM 階段結束時** 才可用（從記憶體讀取完成）
+2. `add` 需要 `x1` 的值在 **EX 階段開始時**
+3. **需要 1 cycle stall**！因為 `lw` 在 MEM 結束才有結果，但 `add` 在 EX 開始就需要——這叫做 **Load-Use Hazard**
+
+```
+Cycle:   1    2    3    4    5    6    7    8
+I1 (lw): IF   ID   EX   MEM  WB
+I2 (add):     IF   ID   --   EX   MEM  WB
+                   ↑ 1 cycle stall (Load-Use Hazard)
+I3 (sub):          IF   --   ID   EX   MEM  WB
+                        ↑ forwarding from I2.EX → I3.EX
+I4 (and):               IF   ID   EX   MEM  WB
+                             ↑ forwarding from I3.EX → I4.EX
+```
+
+</details>
+
+### 延伸練習：Code Scheduling
+
+編譯器可以透過重新排列指令來減少 stall。試著重排以下程式碼：
+
+```assembly
+# 原始程式碼 (有 Load-Use Hazard)
+lw   x1, 0(x2)
+add  x3, x1, x4     # 依賴 x1，必須 stall
+lw   x5, 4(x2)
+add  x6, x5, x7     # 依賴 x5，必須 stall
+
+# 優化後 (填入空白處)
+lw   x1, 0(x2)
+lw   x5, 4(x2)      # 把這條移上來！
+add  x3, x1, x4     # x1 現在已經 ready 了
+add  x6, x5, x7     # x5 也已經 ready 了
+```
+
+這種技術稱為 **Instruction Scheduling** 或 **Pipeline Scheduling**。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：誤解 Throughput 與 Latency
+
+**錯誤認知**：「5-stage pipeline 所以每條指令要 5 個 cycle？」
+
+**正確理解**：
+- **Latency（延遲）**：單條指令從 IF 到 WB 確實需要 5 cycles
+- **Throughput（吞吐量）**：在 steady state，每 cycle 完成 1 條指令
+- 更多 stage 提高時脈頻率，但也增加 Hazard penalty
+
+### 陷阱 2：以為 Forwarding 能解決所有 Data Hazard
+
+**錯誤認知**：「有了 Forwarding 就不用 stall 了！」
+
+**正確理解**：
+- **Load-Use Hazard** 無法完全透過 Forwarding 解決
+- 因為 Load 結果在 MEM 階段才產生，但下一條指令在 EX 階段就需要
+- 必須插入至少 1 cycle 的 stall（bubble）
+
+```
+lw   x1, 0(x2)      # 結果在 cycle 4 (MEM) 才有
+add  x3, x1, x4     # 需要在 cycle 3 (EX) 使用 — 來不及！
+                    # 必須 stall 1 cycle
+```
+
+### 陷阱 3：忽略 Control Hazard 的代價
+
+**錯誤認知**：「Branch 指令就是個跳轉而已。」
+
+**正確理解**：
+- Branch 目標在 EX 階段才確定（比較運算）
+- IF 和 ID 階段已經 fetch 了「錯誤」的後續指令
+- 如果 branch taken，這些指令要被 **flush（清除）**
+- 這叫做 **Branch Penalty**
+
+```
+    beq  x1, x2, target   # cycle 1: IF
+    add  x3, x4, x5       # cycle 2: IF (猜測 not taken)
+    sub  x6, x7, x8       # cycle 3: IF
+                          # cycle 3: 發現 branch taken！
+                          # add, sub 要被清除，浪費 2 cycles
+```
+
+**解法**：**Branch Prediction**
+- Static Prediction：猜 backward branch taken, forward not taken
+- Dynamic Prediction：根據歷史記錄預測（Branch History Table）
 
 ---
 

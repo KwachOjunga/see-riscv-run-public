@@ -66,7 +66,9 @@ This book contains 17 chapters organized into 10 parts, plus 6 comprehensive app
 
 **Appendices** provide quick reference for CSRs, extensions, bootloaders, SBI, RISC-V vs ARM comparison, and memory model.
 
-**Total**: ~146,600 words, ~500 pages
+**Total**: ~160,000+ words, ~550 pages
+
+**v0p11 Enhanced Features**: Each chapter now includes Learning Objectives (🎯), Scenario Dialogues (💡) with character-driven introductions, Hands-on Labs (🛠️) with complete assembly code and QEMU/GDB observation steps, and Common Pitfalls (⚠️) highlighting frequent mistakes and solutions.
 
 ## Acknowledgments
 
@@ -85,4 +87,4 @@ This is a living book. RISC-V continues to evolve, and I'm committed to keeping 
 **Errata**: To be announced
 
 **Danny Jiang**
-December 2025
+January 2026

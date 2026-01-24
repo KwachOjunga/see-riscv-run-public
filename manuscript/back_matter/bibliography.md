@@ -74,8 +74,22 @@ This book is based on publicly available specifications and documentation. All i
 4. **Spike RISC-V ISA Simulator**  
     https://github.com/riscv-software-src/riscv-isa-sim
 
-5. **OpenSBI (Open Source Supervisor Binary Interface)**  
+5. **OpenSBI (Open Source Supervisor Binary Interface)**
     https://github.com/riscv-software-src/opensbi
+
+---
+
+## Companion Projects
+
+1. **danieRTOS - A Minimal RISC-V RTOS for Learning**
+   Danny Jiang
+   https://github.com/djiangtw/djiang-oss-public/tree/main/daniertos
+   A minimal RTOS implementation designed for learning RISC-V system programming. Lab examples in this book reference logic from this project.
+
+2. **Building danieRTOS - Technical Column Series**
+   Danny Jiang
+   https://github.com/djiangtw/tech-column-public/tree/main/topics/building-daniertos
+   A technical article series documenting the danieRTOS development process, covering Context Switch, Interrupt Handling, Timer, Scheduler, and other core topics.
 
 ---
 
@@ -156,4 +170,4 @@ This book is based on publicly available specifications and documentation. All i
 
 ---
 
-**Last Updated**: December 2025
+**Last Updated**: January 2026 (v0p11 Enhancement)

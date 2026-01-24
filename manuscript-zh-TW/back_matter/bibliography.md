@@ -62,20 +62,34 @@ This book is based on publicly available specifications and documentation. All i
 
 ## RISC-V Software and Tools
 
-1. **RISC-V GNU Compiler Toolchain**  
+1. **RISC-V GNU Compiler Toolchain**
     https://github.com/riscv-collab/riscv-gnu-toolchain
 
-2. **RISC-V LLVM**  
+2. **RISC-V LLVM**
     https://github.com/llvm/llvm-project
 
-3. **QEMU RISC-V Emulator**  
+3. **QEMU RISC-V Emulator**
     https://www.qemu.org/docs/master/system/target-riscv.html
 
-4. **Spike RISC-V ISA Simulator**  
+4. **Spike RISC-V ISA Simulator**
     https://github.com/riscv-software-src/riscv-isa-sim
 
-5. **OpenSBI (Open Source Supervisor Binary Interface)**  
+5. **OpenSBI (Open Source Supervisor Binary Interface)**
     https://github.com/riscv-software-src/opensbi
+
+---
+
+## Companion Projects (本書配套專案)
+
+1. **danieRTOS - A Minimal RISC-V RTOS for Learning**  
+   Danny Jiang  
+   https://github.com/djiangtw/djiang-oss-public/tree/main/daniertos  
+   一個專為學習 RISC-V 系統程式設計而設計的最小化 RTOS 實作。本書的 Lab 範例邏輯參考自此專案。
+
+2. **Building danieRTOS - 技術專欄系列**  
+   Danny Jiang  
+   https://github.com/djiangtw/tech-column-public/tree/main/topics/building-daniertos  
+   詳細記錄 danieRTOS 開發過程的技術文章系列，涵蓋 Context Switch、Interrupt Handling、Timer、Scheduler 等核心主題。
 
 ---
 
@@ -156,4 +170,4 @@ This book is based on publicly available specifications and documentation. All i
 
 ---
 
-**Last Updated**: December 2025
+**Last Updated**: January 2026 (v0p11 Enhancement)

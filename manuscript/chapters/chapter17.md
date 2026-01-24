@@ -4,6 +4,50 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Compare Architectures Multi-dimensionally**: Analyze architectural differences from licensing, ecosystem, and technical debt perspectives
+2. **Understand RISC-V's Rise**: Grasp why RISC-V is called "MIPS 2.0" yet succeeded where MIPS struggled
+3. **Make Technology Choices**: Select appropriate architecture based on project needs (IoT vs Mobile vs Server)
+
+---
+
+## 💡 Scenario: War at the Round Table
+
+> **Scene**: The whiteboard in the conference room displays three large words: **ARM vs RISC-V vs MIPS**. The atmosphere is tense.
+
+**Architect**: "Everyone, the specs for our new product line 'Project X' are finalized. We need this chip to run AI acceleration, with extremely low power consumption, and most importantly—the BOM cost is being squeezed hard. Today we must decide on the core architecture."
+
+**Senior (ARM Advocate)**: "Architect, for safety's sake, I still recommend the **ARM Cortex-M** series. Although licensing fees are expensive and we pay per-chip royalties, the toolchain is mature—everyone knows Keil and IAR. If we choose a new architecture to save money and the software team goes crazy debugging, delaying time-to-market, the losses will be even greater."
+
+**Junior (Newcomer)**: "But Senior, I heard **RISC-V** is free? Wouldn't our profit margins be much higher?"
+
+**Architect**: "Junior, to be precise, the RISC-V **ISA (specification)** is free, but good **IP (design)** still costs money (like SiFive or Andes), though usually without royalties. For high-volume products like ours, this can indeed save a huge amount in 'toll fees.'"
+
+**Professor (Consultant)**: "And it's not just about money. Senior, have you considered technical flexibility? ARM's instruction set is closed. If we want to add a few special instructions for our AI algorithm, will ARM listen to us? But with RISC-V, we can use **Custom Extensions** to add our own instructions—performance might improve tenfold."
+
+**Senior**: "Professor makes a good point, but Custom Extensions have risks too. If we add random instructions ourselves, GCC and LLVM won't recognize them. Wouldn't we need to maintain our own compiler team?"
+
+**Architect**: "That's the trade-off. Let me summarize:
+
+| Consideration | ARM | RISC-V | Decision Impact |
+|---------------|-----|--------|-----------------|
+| **Licensing Cost** | High (Per-chip Royalty) | Low (No Royalty) | RISC-V saves money at high volume |
+| **Ecosystem Maturity** | High (20+ years) | Medium (Growing fast) | ARM safer short-term, RISC-V has long-term potential |
+| **Customization Flexibility** | Low (Requires negotiation) | High (Custom Ext.) | RISC-V advantage for AI/crypto acceleration |
+| **Software Tools** | Mature | Improving | ARM temporarily leads in debug experience |
+"
+
+**Junior**: "What about MIPS? I remember university textbooks all taught MIPS?"
+
+**Professor**: "MIPS is a classic and contributed greatly to education. But its business model had problems—licensing too expensive, IP company changed hands multiple times, ecosystem withered. RISC-V inherits MIPS's spirit in many ways (Clean RISC Design), but learned the lesson: **use open-source model to avoid patent hell**."
+
+**Architect**: "Alright, our conclusion: for short-term projects requiring stable time-to-market, choose **ARM**; for long-term strategy needing customization and cost-consciousness, choose **RISC-V**. As for MIPS, unless maintaining legacy product lines, not recommended for new projects."
+
+---
+
 Architecture choice shapes everything. The instruction set determines how software expresses computation, how hardware implements execution, and how ecosystems develop around the platform. RISC-V enters a landscape dominated by ARM in mobile and embedded systems, and historically influenced by MIPS in education and networking. Understanding how these architectures compare reveals RISC-V's design decisions, trade-offs, and competitive position.
 
 This chapter provides a systematic comparison of RISC-V, ARM, and MIPS across eleven dimensions: ISA design philosophy, instruction set complexity, register architecture, exception and interrupt models, memory models, virtual memory, interrupt architecture, calling conventions, pipeline and microarchitecture, ecosystem and licensing, and future directions. Each section examines how the architectures approach the same problem, highlighting similarities, differences, and the implications for software and hardware.

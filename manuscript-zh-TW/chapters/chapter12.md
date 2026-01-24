@@ -4,6 +4,48 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 SISD vs SIMD**：掌握純量運算與向量運算的差異
+2. **掌握 VLA 核心概念**：明白 Vector-Length Agnostic 設計的價值
+3. **使用 vsetvli 指令**：能夠進行 Strip-mining (分條處理)
+4. **撰寫 Vector 迴圈**：掌握標準的 VLA Loop 結構
+5. **比較不同 SIMD 架構**：理解 RISC-V V vs ARM SVE vs x86 AVX 的差異
+
+---
+
+## 💡 情境引入：伸縮自如的切麵機
+
+> **場景**：小華對著螢幕上的 SIMD 代碼發愁。
+
+**小華**：「王工，這太痛苦了。我之前針對 128-bit 的硬體寫了一版優化，現在公司換了新晶片支援 512-bit，我原本的迴圈每次只切 4 個 float，現在明明可以切 16 個，但我得把整個迴圈邏輯重寫一遍，連剩下的『尾巴』(Tail) 處理都要改。」
+
+**王工**：「這就是**固定寬度 SIMD (Fixed-width SIMD)** 的缺點。它就像一個**固定尺寸的『餅乾模具』**。你用小模具去切大麵團，當然沒效率；換了大模具，舊的食譜（程式碼）又不能用。」
+
+**小華**：「那 RISC-V 怎麼解決？」
+
+**王工**：「RISC-V 的 **V (Vector) Extension** 採用了一種叫 **VLA (Vector-Length Agnostic，向量長度無關)** 的設計。
+
+想像你有一個**『智慧型切麵機』**。你不需要告訴它『我要切 4 塊』或『我要切 16 塊』。你只需要告訴它：『**這裡有一大坨麵團（總長度 N），請用你目前最大的能力幫我切。**』」
+
+**小華**：「最大的能力？」
+
+**王工**：「對。硬體會回答你：『報告，我的刀一次能切 8 塊 (vl)』。
+
+然後你就切 8 塊，把麵團往前推，再問它一次。
+
+到了最後剩下 3 塊麵團時，你也不用換模具，硬體會自動告訴你：『這次我只切 3 塊』。
+
+這樣寫出來的程式，不管放到 128-bit 還是 1024-bit 的機器上，都不用改任何一行代碼，自動跑出最高效能。」
+
+**小華**：「哇，連尾巴都自動處理了？快教我這個指令！」
+
+**王工**：「這就是傳說中的神器：`vsetvli`。」
+
+---
+
 Modern application 越來越需要 data-parallel processing。Image processing 對數百萬個 pixel 應用相同的 filter。Machine learning 對數千個 element 執行 matrix operation。Scientific simulation 在廣大的 grid 上計算 physics equation。這些 workload 共享一個共同模式：對不同 data 重複相同的 operation。
 
 Traditional scalar processor 一次處理一個 operation。要處理 1000 個 element，它們執行 1000 條獨立的 instruction。相比之下，vector processor 使用單條 instruction 同時操作多個 element — Single Instruction, Multiple Data (SIMD)。這可以為 data-parallel code 提供 4×、8× 甚至更大的 speedup。
@@ -620,6 +662,231 @@ vmovdqu [rcx], ymm2     ; Store
 | **Ratification** | 1999 (SSE)<br/>2011 (AVX)<br/>2016 (AVX-512) | 2005 | 2016 | 2021 |
 | **Key Advantage** | Mature ecosystem | Simple, widely deployed | Scalable, predication | Scalable, simple, future-proof |
 | **Key Limitation** | Fixed widths, complexity | Fixed 128-bit only | Complex instruction set | Newer, less mature tooling |
+
+---
+
+## 🛠️ 實作練習：Lab 12.1 — 向量加法 (Vector Add)
+
+這個 Lab 將展示最經典的 VLA 迴圈結構。這是 RISC-V Vector 程式設計的基礎模式。
+
+### 實驗目標
+
+1. 撰寫 RISC-V Vector Assembly 實作 C[i] = A[i] + B[i]
+2. 理解 `vsetvli` 的回傳值 `vl` 的意義
+3. 比較 Scalar Loop 與 Vector Loop 的結構差異
+
+### Strip-mining Loop 結構
+
+這是 VLA 程式設計的核心模式：
+
+```text
+while (n > 0) {
+    vl = vsetvli(n);    // 詢問硬體：你能處理多少？
+    load(vl elements);   // 載入 vl 個元素
+    compute();           // 執行運算
+    store(vl elements);  // 儲存 vl 個元素
+    n -= vl;             // 剩餘數量減少
+    pointers += vl;      // 指標前進
+}
+```
+
+### 程式碼
+
+**檔案 1: `vector_add.S`**
+
+```assembly
+# vector_add.S - 向量加法 (VLA 版本)
+.section .text
+.global vec_add
+
+# void vec_add(int *a, int *b, int *c, int n)
+# a0 = pointer to A
+# a1 = pointer to B
+# a2 = pointer to C
+# a3 = n (element count)
+
+vec_add:
+    # --- Strip-mining Loop ---
+loop:
+    # 1. 設定向量長度
+    # vsetvli rd, rs1, vtype
+    # t0: 硬體回傳實際能處理的元素數 (vl)
+    # a3: 剩餘元素數 (AVL)
+    # e32: 元素大小 32-bit
+    # m1: LMUL=1 (使用 1 個向量暫存器)
+    # ta, ma: Tail/Mask Agnostic
+    vsetvli t0, a3, e32, m1, ta, ma
+
+    # 2. 載入資料
+    vle32.v v0, (a0)    # v0 = A[0:vl]
+    vle32.v v1, (a1)    # v1 = B[0:vl]
+
+    # 3. 執行加法
+    vadd.vv v2, v0, v1  # v2 = v0 + v1
+
+    # 4. 寫回資料
+    vse32.v v2, (a2)    # C[0:vl] = v2
+
+    # 5. 指標移動 (int32 = 4 bytes)
+    slli t1, t0, 2      # t1 = vl * 4
+    add a0, a0, t1      # A 指標前進
+    add a1, a1, t1      # B 指標前進
+    add a2, a2, t1      # C 指標前進
+
+    # 6. 更新剩餘數量
+    sub a3, a3, t0      # n = n - vl
+
+    # 7. 繼續迴圈
+    bnez a3, loop
+
+    ret
+```
+
+**檔案 2: `main.c`**
+
+```c
+#include <stdio.h>
+
+extern void vec_add(int *a, int *b, int *c, int n);
+
+#define N 100  // 故意不是 2 的次方，測試 tail handling
+
+int main(void) {
+    int a[N], b[N], c[N];
+
+    // 初始化
+    for (int i = 0; i < N; i++) {
+        a[i] = i;
+        b[i] = 100;
+        c[i] = 0;
+    }
+
+    printf("Starting Vector Add...\n");
+    vec_add(a, b, c, N);
+
+    // 驗證
+    int error = 0;
+    for (int i = 0; i < N; i++) {
+        if (c[i] != a[i] + b[i]) {
+            printf("Error at %d: %d + %d != %d\n",
+                   i, a[i], b[i], c[i]);
+            error = 1;
+            break;
+        }
+    }
+
+    if (!error) {
+        printf("Success! All %d calculations correct.\n", N);
+    }
+
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 1. 編譯 (需要支援 V extension 的工具鏈)
+riscv64-unknown-elf-gcc -march=rv64gcv -mabi=lp64d \
+    -o vec_test main.c vector_add.S
+
+# 2. 執行 (使用 Spike 模擬器)
+spike --isa=rv64gcv pk vec_test
+
+# 或使用 QEMU
+qemu-riscv64 -cpu rv64,v=true vec_test
+```
+
+### 預期輸出
+
+```text
+Starting Vector Add...
+Success! All 100 calculations correct.
+```
+
+### 觀察重點
+
+不同 VLEN 的硬體，迴圈次數不同：
+
+| VLEN | 每次處理 (32-bit) | 100 元素需要迴圈次數 |
+|------|------------------|-------------------|
+| 128-bit | 4 個 | 25 次 |
+| 256-bit | 8 個 | 13 次 |
+| 512-bit | 16 個 | 7 次 |
+| 1024-bit | 32 個 | 4 次 |
+
+**重點**：程式碼完全不變，效能自動隨硬體提升！
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：畫蛇添足處理尾巴
+
+**錯誤情境**：習慣了傳統 SIMD，自己寫額外的尾巴處理迴圈。
+
+**後果**：浪費時間，而且可能引入 bug。
+
+```c
+// ❌ 錯誤：不需要自己處理尾巴
+void vec_add_wrong(int *a, int *b, int *c, int n) {
+    int i;
+    // 向量部分
+    for (i = 0; i + 4 <= n; i += 4) {
+        // vector_add_4(a+i, b+i, c+i);
+    }
+    // 尾巴部分 (這在 VLA 裡是多餘的！)
+    for (; i < n; i++) {
+        c[i] = a[i] + b[i];
+    }
+}
+
+// ✅ 正確：vsetvli 自動處理尾巴
+// 見上面的 Assembly 範例
+```
+
+### 陷阱 2：假設固定的 VLEN
+
+**錯誤情境**：硬編碼假設 VLEN=256 或其他特定值。
+
+**後果**：程式在不同硬體上行為錯誤或效能下降。
+
+```assembly
+# ❌ 錯誤：假設每次處理 8 個元素
+loop:
+    li t0, 8              # 硬編碼！
+    vsetvli zero, t0, e32, m1, ta, ma
+    ...
+
+# ✅ 正確：讓硬體決定
+loop:
+    vsetvli t0, a3, e32, m1, ta, ma  # a3 = 剩餘數量
+    ...
+```
+
+### 陷阱 3：忘記 LMUL 的影響
+
+**錯誤情境**：不理解 LMUL (Vector Register Group Multiplier) 的作用。
+
+**說明**：
+
+- **LMUL=1**：使用 1 個 vector register (v0-v31)
+- **LMUL=2**：使用 2 個 register 為一組 (v0-v1, v2-v3, ...)
+- **LMUL=4/8**：更大的 group
+
+```assembly
+# LMUL=1: 可用 v0-v31 (32 個獨立 register)
+vsetvli t0, a3, e32, m1, ta, ma
+
+# LMUL=2: 可用 v0, v2, v4, ... (16 組，每組 2 個)
+vsetvli t0, a3, e32, m2, ta, ma
+# 此時 v0 和 v1 是同一組，不能分開使用
+
+# LMUL=8: 可用 v0, v8, v16, v24 (4 組，每組 8 個)
+vsetvli t0, a3, e32, m8, ta, ma
+```
+
+> 💡 **提示**：LMUL > 1 可以處理更多元素，但會減少可用的 register 數量。對於簡單的向量加法，LMUL=1 通常就夠了。
 
 ---
 

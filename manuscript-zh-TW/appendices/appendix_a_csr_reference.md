@@ -4,6 +4,148 @@
 
 ---
 
+> 💡 **使用指南**：本附錄是開發時的「儀表板」。當你需要查詢某個 CSR 的 bit 位置或操作方式時，直接翻到這裡。
+
+---
+
+## 🛠️ 常用 CSR 速查表
+
+### `mstatus` (Machine Status) Bit Map
+
+這是最常用的 CSR，控制中斷、權限模式等核心功能。
+
+```text
+63    62    38 37 36   34 33 32   22 21 20 19 18 17   13 12 11 10  9  8  7  6  5  4  3  2  1  0
+┌────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┬────┐
+│ SD │WPRI│ MBE│ SBE│ SXL│ UXL│WPRI│ TSR│ TW │ TVM│ MXR│ SUM│MPRV│ XS │ FS │ MPP│WPRI│ SPP│MPIE│
+└────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┴────┘
+                                                                   │     │     │
+                                                                   │     │     └─ Bit 7: MPIE
+                                                                   │     └─ Bit 11-12: MPP
+                                                                   └─ Bit 3: MIE
+```
+
+**關鍵位元說明**：
+
+| Bit | 名稱 | 說明 |
+|-----|------|------|
+| 3 | **MIE** | Machine Interrupt Enable (全域中斷開關) |
+| 7 | **MPIE** | Previous MIE (進入 Trap 前的 MIE 值) |
+| 11-12 | **MPP** | Previous Privilege (00=U, 01=S, 11=M) |
+| 17 | **MPRV** | Modify Privilege (Load/Store 使用 MPP 權限) |
+
+### 常用操作 Snippet
+
+```c
+// 1. 開啟全域中斷 (Enable Global Interrupt)
+csrs mstatus, (1 << 3);   // Set MIE bit
+
+// 2. 關閉全域中斷 (Disable Global Interrupt)
+csrc mstatus, (1 << 3);   // Clear MIE bit
+
+// 3. 設定下一個模式為 S-mode (準備 mret)
+csrc mstatus, (3 << 11);  // 清除 MPP
+csrs mstatus, (1 << 11);  // 設定 MPP = 01 (S-mode)
+
+// 4. 讀取當前 MPP 值
+csrr t0, mstatus
+srli t0, t0, 11
+andi t0, t0, 3            // t0 = MPP (0=U, 1=S, 3=M)
+```
+
+---
+
+### `mie` / `mip` (Interrupt Enable/Pending) 對照
+
+這兩個 CSR 控制中斷的啟用與待處理狀態。
+
+```text
+Bit 位置對照：
+┌─────────────────────────────────────────────────────────────┐
+│  11  │  9   │  7   │  5   │  3   │  1   │                   │
+│ MEIE │ SEIE │ MTIE │ STIE │ MSIE │ SSIE │                   │
+│  M   │  S   │  M   │  S   │  M   │  S   │                   │
+│ Ext  │ Ext  │Timer │Timer │ Soft │ Soft │                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**常用操作**：
+
+```c
+// 啟用 Machine Timer Interrupt
+csrs mie, (1 << 7);       // Set MTIE
+
+// 啟用 Machine External Interrupt
+csrs mie, (1 << 11);      // Set MEIE
+
+// 檢查是否有 Timer Interrupt Pending
+csrr t0, mip
+andi t0, t0, (1 << 7)     // t0 != 0 表示有 Timer 中斷待處理
+```
+
+---
+
+### `mcause` (Machine Cause) 解碼表
+
+當 Trap 發生時，`mcause` 告訴你原因。
+
+**Interrupt (mcause[63] = 1)**：
+
+| Code | 名稱 | 說明 |
+|------|------|------|
+| 1 | Supervisor Software Interrupt | S-mode 軟體中斷 |
+| 3 | Machine Software Interrupt | M-mode 軟體中斷 |
+| 5 | Supervisor Timer Interrupt | S-mode Timer 中斷 |
+| 7 | Machine Timer Interrupt | M-mode Timer 中斷 |
+| 9 | Supervisor External Interrupt | S-mode 外部中斷 |
+| 11 | Machine External Interrupt | M-mode 外部中斷 |
+
+**Exception (mcause[63] = 0)**：
+
+| Code | 名稱 | 說明 |
+|------|------|------|
+| 0 | Instruction Address Misaligned | 指令地址未對齊 |
+| 1 | Instruction Access Fault | 指令存取錯誤 |
+| 2 | Illegal Instruction | 非法指令 |
+| 3 | Breakpoint | 斷點 (ebreak) |
+| 4 | Load Address Misaligned | 載入地址未對齊 |
+| 5 | Load Access Fault | 載入存取錯誤 |
+| 6 | Store Address Misaligned | 儲存地址未對齊 |
+| 7 | Store Access Fault | 儲存存取錯誤 |
+| 8 | Environment Call from U-mode | U-mode ecall |
+| 9 | Environment Call from S-mode | S-mode ecall |
+| 11 | Environment Call from M-mode | M-mode ecall |
+| 12 | Instruction Page Fault | 指令頁面錯誤 |
+| 13 | Load Page Fault | 載入頁面錯誤 |
+| 15 | Store Page Fault | 儲存頁面錯誤 |
+
+**Trap Handler 範例**：
+
+```c
+void trap_handler() {
+    uint64_t cause;
+    asm volatile ("csrr %0, mcause" : "=r" (cause));
+
+    if (cause & (1UL << 63)) {
+        // Interrupt
+        uint64_t code = cause & 0x7FF;
+        switch (code) {
+            case 7:  handle_timer_interrupt(); break;
+            case 11: handle_external_interrupt(); break;
+        }
+    } else {
+        // Exception
+        switch (cause) {
+            case 2:  handle_illegal_instruction(); break;
+            case 7:  handle_store_access_fault(); break;
+            case 8:  handle_ecall_from_umode(); break;
+        }
+    }
+}
+```
+
+---
+
 本附錄提供 RISC-V Control and Status Register（CSR）的全面參考。CSR 控制 processor behavior、報告 status，並提供 privileged functionality 的訪問。每個 CSR 有 12-bit address，並使用專用的 CSR instruction（CSRRW、CSRRS、CSRRC 及其 immediate variant）訪問。
 
 ---

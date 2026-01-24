@@ -4,6 +4,45 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **掌握 GDB Stub 用法**：使用 QEMU `-s -S` 啟動 GDB Server 進行遠端除錯
+2. **熟悉核心除錯指令**：`break`、`si`、`info reg`、`x/` 等 GDB 指令
+3. **建立除錯思維**：採用「觀察 → 假設 → 驗證」的系統化除錯流程
+
+---
+
+## 💡 情境引入：讓時間暫停的懷錶
+
+> **場景**：小華指著螢幕上的亂碼結果，快要抓狂了。
+
+**小華**：「我不行了。我只是想把 1 加到 5，為什麼結果會變成 34821？我已經盯著這五行 Assembly 看了一小時了！」
+
+**阿杰**：「用眼睛看是不夠的。小華，程式執行就像火車飛奔，你坐在路邊怎麼可能看清輪子上有沒有裂痕？」
+
+**小華**：「那怎麼辦？加 `printf`？」
+
+**阿杰**：「`printf` 是不錯，但在這種裸機 (Bare-metal) 或者程式崩潰的情況下，你根本印不出東西。你需要一把能讓時間暫停的『懷錶』—— **GDB**。」
+
+**小華**：「暫停時間？」
+
+**阿杰**：「沒錯。透過 **JTAG** 硬體介面（或者我們現在用的 QEMU 模擬器），我們可以強迫 CPU 進入 **Debug Mode**。
+
+| Debug Mode 功能 | 比喻 |
+|----------------|------|
+| 檢查 Registers | 偷看錢包 |
+| 查看 Memory | 翻箱倒櫃 |
+| Single Step | 慢動作重播 |
+| Breakpoint | 設置陷阱 |
+
+在這個模式下，CPU 就像被按了暫停鍵。我們可以一次只執行一行指令，看看哪一步走歪了。
+
+來，把這個壞掉的程式交給我，我們來抓蟲。」
+
+---
+
 Software development 需要 debugging。程式 crash，我們需要知道原因。Function 返回錯誤的值，我們需要 step through 它的執行。Performance bottleneck 出現，我們需要 trace instruction flow。Debugging 將不透明的 failure 轉化為可理解的問題。
 
 RISC-V 提供全面的 debug architecture，支援 halting debug（停止 processor，檢查 state）和 non-intrusive trace（記錄執行而不停止）。Debug Module 允許 external debugger 通過 JTAG 或其他 interface 控制 processor。Hardware breakpoint 和 trigger 能夠精確控制何時 halt execution。Debug mode 為 debug operation 提供特殊的 execution environment。Trace support 捕獲 instruction 和 data flow 以進行 post-mortem analysis。
@@ -624,6 +663,167 @@ ARM：
 - Extensive tool support
 
 對於 embedded system，SWD 的 2-pin interface 很有吸引力。對於複雜的 SoC，兩種 architecture 都提供可比較的 debug capability。
+
+---
+
+## 🛠️ 實作練習：Lab 15.1 — 消失的數值 (Bug Hunting with GDB)
+
+這個 Lab 設計了一個經典的 **Pointer Stride Error**。這是 RISC-V 初學者最常犯的錯：以為 `int` 指針 `+1` 會移動 4 bytes，但在 Assembly 裡 `addi x, x, 1` 真的就是加 1 byte。
+
+### 實驗目標
+
+1. 啟動 QEMU 的 GDB Server 功能
+2. 連接 GDB 並載入 Symbol
+3. 使用 `layout asm` 檢視組合語言
+4. 找出程式中的兩個 Bug
+
+### 有 Bug 的程式碼 (buggy_sum.S)
+
+```assembly
+.section .data
+# 定義一個陣列：10, 20, 30, 40, 50
+# 預期結果：10+20+30+40+50 = 150 (Hex: 0x96)
+nums: .word 10, 20, 30, 40, 50
+
+.section .text
+.global _start
+
+_start:
+    la  t0, nums        # t0 指向陣列開頭
+    li  t1, 5           # t1 是迴圈計數器 (Count = 5)
+    # BUG 1: 忘記初始化累加器 a0 (Accumulator)
+    # 我們假設 a0 是 0，但實際上可能是垃圾值
+
+loop:
+    lw  t2, 0(t0)       # 載入當前數字到 t2
+    add a0, a0, t2      # 累加：a0 = a0 + t2
+
+    # BUG 2: 指針移動錯誤！
+    # 我們讀取的是 word (4 bytes)，但這裡只加了 1
+    addi t0, t0, 1      # ❌ 應該是 addi t0, t0, 4
+
+    addi t1, t1, -1     # 計數器減 1
+    bnez t1, loop       # 如果還沒數完，繼續跑
+
+stop:
+    j stop
+```
+
+### 除錯流程
+
+**步驟 A：編譯 (帶 Debug 資訊)**
+
+```bash
+# -g 是關鍵！告訴編譯器保留符號表
+riscv64-unknown-elf-gcc -g -nostdlib -o buggy_sum.elf buggy_sum.S
+```
+
+**步驟 B：啟動 QEMU (作為 Target)**
+
+```bash
+# -S: 啟動後立即暫停 CPU
+# -s: 開啟 GDB Server，預設 Port 1234
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel buggy_sum.elf -S -s
+```
+
+*(終端機會卡住，請開啟另一個終端機操作 GDB)*
+
+**步驟 C：啟動 GDB (作為 Host)**
+
+```bash
+riscv64-unknown-elf-gdb buggy_sum.elf
+```
+
+**步驟 D：GDB 互動偵查**
+
+```gdb
+(gdb) target remote :1234     # 連接 QEMU
+(gdb) layout asm              # 開啟 Assembly 視窗
+(gdb) break loop              # 在 loop 標籤設斷點
+(gdb) continue                # 執行到斷點
+
+# 進入迴圈後...
+(gdb) info reg a0             # 觀察累加器 → 發現不是 0！
+(gdb) info reg t0             # 觀察指標
+(gdb) si                      # Single Step 一行
+(gdb) info reg t0             # 再看指標 → 只移動了 1 byte！
+
+# 發現問題後...
+(gdb) x/5xw &nums             # 查看陣列記憶體內容
+```
+
+### 預期發現
+
+1. **Bug 1 (a0 未初始化)**：第一次進入 loop 時，`info reg a0` 顯示垃圾值
+2. **Bug 2 (指針步長)**：每次 `addi t0, t0, 1` 後，t0 只增加 1，導致讀取到錯位的資料
+
+### 修正後的程式碼
+
+```assembly
+_start:
+    la  t0, nums
+    li  t1, 5
+    li  a0, 0           # ✅ FIX 1: 初始化累加器
+
+loop:
+    lw  t2, 0(t0)
+    add a0, a0, t2
+    addi t0, t0, 4      # ✅ FIX 2: word = 4 bytes
+    addi t1, t1, -1
+    bnez t1, loop
+
+stop:
+    j stop
+```
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：編譯優化干擾除錯
+
+**錯誤情境**：使用 `-O2` 編譯後，GDB 裡的行號跟原始碼對不上，變數也「看不見」。
+
+**原因**：優化器會重排指令、消除暫存器、內聯函數。
+
+```bash
+# ❌ 除錯時不要用高優化等級
+riscv64-unknown-elf-gcc -O2 -o program.elf program.c
+
+# ✅ 除錯時使用 -O0 -g
+riscv64-unknown-elf-gcc -O0 -g -o program.elf program.c
+```
+
+### 陷阱 2：忘記 `-g` 旗標
+
+**錯誤情境**：GDB 顯示「No symbol table is loaded」。
+
+**原因**：沒有加 `-g` 編譯，Symbol 資訊被丟棄。
+
+```bash
+# ❌ 沒有 debug info
+riscv64-unknown-elf-gcc -o program.elf program.c
+
+# ✅ 保留 debug info
+riscv64-unknown-elf-gcc -g -o program.elf program.c
+```
+
+### 陷阱 3：QEMU 沒有用 `-S` 暫停
+
+**錯誤情境**：GDB 連接時程式已經跑完或 Crash。
+
+**解決**：一定要加 `-S` 讓 QEMU 啟動後暫停，等待 GDB 連接。
+
+```bash
+# ❌ 程式啟動後立刻開始執行
+qemu-system-riscv64 -machine virt -kernel program.elf -s
+
+# ✅ 程式啟動後暫停，等待 GDB
+qemu-system-riscv64 -machine virt -kernel program.elf -S -s
+```
+
+> 💡 **小技巧**：`-s` = GDB Server on port 1234，`-S` = Stop at startup。兩者經常一起使用。
 
 ---
 

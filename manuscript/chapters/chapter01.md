@@ -4,6 +4,44 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand the ISA's Role**: Grasp how the Instruction Set Architecture (ISA) serves as the critical interface between software and hardware
+2. **Master RISC-V Core Philosophy**: Understand how the three pillars—modularity, simplicity, and openness—influence design decisions
+3. **Distinguish Business Model Differences**: Recognize the fundamental licensing and ecosystem differences between RISC-V and x86/ARM
+4. **Decode ISA Naming**: Read and understand ISA strings like `RV64GC` and `RV32IMC`
+5. **Set Up Development Environment**: Successfully install the RISC-V toolchain and run your first program
+
+---
+
+## 💡 Scenario: The Break Room Decision
+
+> **Scene**: Monday morning in the company break room. The coffee machine hums quietly. The aroma of fresh coffee fills the air, but Junior's expression is anything but relaxed.
+
+**Junior**: (sighing) "Hey Senior, the PM just dropped a new project on me. Says we need to evaluate RISC-V for the MCU selection instead of our usual ARM Cortex-M. My head is spinning—what's the difference anyway? Don't they both just run C code? Why make things complicated?"
+
+**Senior**: (accepting a fresh cup of coffee with a smile) "Don't panic. Think of it this way: you've been eating at a 'franchise fast-food restaurant' all this time, and now the boss wants you to try a 'build-your-own gourmet kitchen.' Writing C code might feel similar, but the underlying rules of the game have changed."
+
+**Junior**: "Rules of the game? You mean the instruction set architecture?"
+
+**Senior**: "Exactly. Think about it—when we use ARM, the ecosystem is strong, but it's still one company's product. To use their IP, your company pays licensing fees, and you get whatever features they decide to give you. If we wanted to add special hardware acceleration for an AI algorithm, could we modify ARM's core?"
+
+**Junior**: "No way. The vendor would never let us mess with their core."
+
+**Senior**: "And that's RISC-V's biggest value. It's an **open standard**. Like TCP/IP or Linux, no single company 'owns' it. If we need special acceleration, under RISC-V, we can design our own custom instructions and add them in—no begging the vendor for permission."
+
+**Junior**: "Sounds flexible, but wouldn't it be chaotic? Without standards, would programs even run?"
+
+**Senior**: "That's the most common newbie question. The clever thing about RISC-V is its **modular design**. There's a mandatory 'base model' that everyone must follow, and additional extensions are like LEGO blocks—add them when you need them. That's why everyone from NVIDIA to university labs is playing with it."
+
+**Junior**: (eyes lighting up) "Interesting... So we're not just 'users' anymore—we can become 'designers'?"
+
+**Senior**: "Bingo! Come on, let's head back to our desks. I'll help you set up the environment, and we'll start from the foundation of these 'LEGO blocks.'"
+
+---
+
 RISC-V represents a fundamental shift in how we think about processor architectures. Unlike proprietary instruction sets that require licenses and royalties, RISC-V is completely open and free. Unlike monolithic architectures that bundle everything together, RISC-V is modular, allowing implementations from tiny microcontrollers to high-performance servers. Unlike architectures burdened by decades of legacy decisions, RISC-V was designed from scratch in 2010, learning from 30 years of RISC evolution.
 
 This chapter introduces RISC-V by exploring its historical context, design philosophy, and place in the architecture landscape. We'll trace the RISC revolution from the 1980s through RISC-V's creation at UC Berkeley. We'll examine why an open ISA matters and how RISC-V's modular design enables unprecedented flexibility. We'll compare RISC-V with ARM and MIPS to understand its competitive position. By the end, you'll understand not just what RISC-V is, but why it matters and why it's rapidly gaining adoption across the industry.
@@ -441,6 +479,105 @@ RISC-V's trajectory is clear: rapid growth driven by openness, simplicity, and i
 The comparison with MIPS is particularly instructive. MIPS had technical merit but remained proprietary too long. By the time it opened, RISC-V had captured the open ISA mindshare. ARM's technical excellence and ecosystem are formidable, but its proprietary nature creates opportunities for RISC-V.
 
 RISC-V represents not just a new ISA, but a new model for processor architecture: open, collaborative, and free from vendor lock-in. This model is proving compelling for the next generation of computing.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 1.1 — Hello RISC-V World
+
+Now let's get our hands dirty! In this lab, you'll install the RISC-V toolchain and run your first program.
+
+### Lab Objectives
+
+1. Understand what a Cross-Compiler is
+2. Install the `riscv64-unknown-elf-gcc` toolchain
+3. Successfully compile and emulate your first C program
+
+### Environment Setup
+
+Choose one of the following methods to install the RISC-V toolchain:
+
+**Option A: Using xPack Pre-built Packages (Recommended for Beginners)**
+
+```bash
+# Download xPack RISC-V GNU Toolchain
+# https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases
+
+# Linux/macOS example (adjust version as needed)
+wget https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v14.2.0-3/xpack-riscv-none-elf-gcc-14.2.0-3-linux-x64.tar.gz
+tar xzf xpack-riscv-none-elf-gcc-14.2.0-3-linux-x64.tar.gz
+export PATH=$PWD/xpack-riscv-none-elf-gcc-14.2.0-3/bin:$PATH
+
+# Verify installation
+riscv-none-elf-gcc --version
+```
+
+**Option B: Using Docker (Cross-platform Consistency)**
+
+```bash
+# Use pre-built Docker image
+docker pull riscv/riscv-gnu-toolchain
+docker run -it -v $(pwd):/work riscv/riscv-gnu-toolchain bash
+```
+
+**Option C: Ubuntu/Debian Package Manager**
+
+```bash
+sudo apt update
+sudo apt install gcc-riscv64-unknown-elf qemu-system-riscv64
+
+# Verify installation
+riscv64-unknown-elf-gcc --version
+qemu-system-riscv64 --version
+```
+
+### Write the Program
+
+Create a simple `hello.c`:
+
+```c
+// hello.c
+#include <stdio.h>
+
+int main() {
+    printf("Hello, RISC-V World!\n");
+    printf("This is my first RISC-V program!\n");
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile (using ELF format supported by Proxy Kernel)
+riscv64-unknown-elf-gcc -o hello hello.c
+
+# Check file format
+file hello
+# Output should be: hello: ELF 64-bit LSB executable, UCB RISC-V, ...
+
+# Run using QEMU User Mode (requires qemu-riscv64)
+qemu-riscv64 hello
+
+# Or run using Spike + Proxy Kernel
+spike pk hello
+```
+
+**Expected Output**:
+
+```
+Hello, RISC-V World!
+This is my first RISC-V program!
+```
+
+### What You Just Did
+
+Congratulations! You've completed three important steps:
+
+1. **Cross-Compilation**: Used a compiler running on x86 to generate code for RISC-V
+2. **Emulation**: Used QEMU or Spike to execute RISC-V instructions on your x86 machine
+3. **Toolchain Validation**: Confirmed that the complete toolchain (compiler, linker, emulator) is working
+
+> **danieRTOS Reference**: This lab establishes the foundation for all subsequent labs. The same toolchain setup is used in danieRTOS development.
 
 ---
 

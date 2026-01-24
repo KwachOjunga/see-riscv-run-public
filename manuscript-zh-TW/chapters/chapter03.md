@@ -10,6 +10,62 @@
 
 ---
 
+## 🎯 學習目標
+
+完成本章後，你將能夠：
+
+1. **理解為何需要分層保護**：了解 Isolation & Protection 的核心概念，以及為什麼現代處理器必須限制應用程式直接存取硬體
+2. **掌握 M/S/U 三種模式的權限差異**：清楚區分 Machine Mode（物業總管）、Supervisor Mode（企業租戶）、User Mode（一般員工）各自的能力與限制
+3. **理解 SBI 如何作為 M-mode 的服務窗口**：掌握 Supervisor Binary Interface 作為 S-mode 與 M-mode 之間標準溝通橋樑的運作方式
+4. **能夠使用 ecall 請求服務**：理解應用程式如何透過 `ecall` 指令「打電話」給作業系統或 Firmware，取得需要的服務
+
+---
+
+## 💡 情境引入：智慧大樓的門禁卡——理解特權分級
+
+> **場景**：實驗室的白板前。小華指著螢幕上的 "Illegal Instruction Exception" 一臉無辜。王工放下手中的茶杯，推了推眼鏡。
+
+**小華**：「王工，我只是想在我的應用程式裡暫時關閉中斷，讓計時準一點，為什麼 CPU 直接報錯把我踢出來了？這塊板子不是我買的嗎？」
+
+**王工**：「小華，你把 CPU 想得太簡單了。現在的處理器設計，就像是一棟**『智慧商辦大樓』**，為了安全，必須嚴格分級。」
+
+**小華**：「分級？」
+
+**王工**：「想像一下：
+
+- **M-mode (Machine Mode) 是『物業總管』**：這是最高權限。他擁有整棟大樓的萬能鑰匙，可以直接控制水電總開關（硬體重置、時脈設定）。只有他能直接跟大樓的基礎設施對話。
+
+- **S-mode (Supervisor Mode) 是『企業租戶』**：這就是我們的作業系統（OS）。它租了幾個樓層，可以決定辦公桌怎麼擺（記憶體管理）、誰坐哪個位置（排程），但它不能去切斷整棟樓的電源，也不能去干擾其他公司的樓層。
+
+- **U-mode (User Mode) 就是『一般員工』**：這就是你的應用程式。你只能在你的辦公桌（被分配的記憶體）範圍內工作。你想關空調？不行。你想關總電源？門都沒有。」
+
+**小華**：「那我如果真的覺得冷，想調空調怎麼辦？（意指需要硬體資源）」
+
+**王工**：「你要『打電話』給櫃檯。在 RISC-V 裡，這叫做 **`ecall` (Environment Call)**。你發出請求，OS (S-mode) 會檢查你有沒有資格，如果合理，OS 會幫你做；如果涉及更底層的硬體，OS 還得再向 M-mode 申請。」
+
+**小華**：「原來如此，所以我剛剛試圖關中斷，就像是一個實習生想跑去機房拉電閘？」
+
+**王工**：「沒錯，警衛（CPU 硬體異常機制）立刻就把你攔下來了。這種層層保護，就是系統不會因為一個爛程式就全盤崩潰的關鍵。」
+
+```
+        ┌─────────────────────────────────────────┐
+        │           M-mode (物業總管)              │
+        │  ┌─────────────────────────────────┐    │
+        │  │      S-mode (企業租戶/OS)        │    │
+        │  │  ┌─────────────────────────┐    │    │
+        │  │  │   U-mode (員工/App)      │    │    │
+        │  │  │                         │    │    │
+        │  │  │    ecall ──────────────►│────┼───►│ 打電話給櫃檯
+        │  │  │    ◄─────────────────── │◄───┼────│ 回覆結果
+        │  │  └─────────────────────────┘    │    │
+        │  └─────────────────────────────────┘    │
+        └─────────────────────────────────────────┘
+```
+
+> 💡 **核心洞見**：特權級別不是為了限制你，而是為了保護整個系統。就像大樓的門禁不是為了刁難員工，而是為了防止一個人的失誤導致整棟樓停電。
+
+---
+
 ## 3.1 RISC-V Privilege 架構
 
 **Privilege Model**
@@ -477,6 +533,243 @@ halt:
 ```
 
 這段程式碼在 M-mode 中運行，直接配置硬體。沒有 OS，沒有 SBI——只有程式碼和硬體。
+
+---
+
+## 🛠️ Lab 3.1: 穿越特權的電梯 (The Ecall Elevator)
+
+本 Lab 的目標是讓你「看見」特權模式的切換過程。我們將使用 QEMU 模擬一個簡易的 Bare-metal 環境，觀察 User Mode 的程式如何透過 `ecall` 「搭電梯」進入更高的特權層級。
+
+### 目標
+
+1. 理解 `ecall` 指令如何觸發異常 (Exception) 並陷入 (Trap) 到更高層級
+2. 觀察 `mcause` 暫存器的值，確認異常類型是 "Environment call from U-mode"
+3. 觀察 `mepc` 暫存器，確認它指向 `ecall` 指令的位址
+
+### 環境需求
+
+- QEMU RISC-V 模擬器 (`qemu-system-riscv64`)
+- RISC-V GCC 工具鏈 (`riscv64-unknown-elf-gcc`)
+- GDB 調試器
+
+### 程式碼
+
+**檔案：`ecall_elevator.S`**
+
+```assembly
+# Lab 3.1: The Ecall Elevator
+# 觀察 ecall 如何從 U-mode 進入 M-mode
+
+.section .text
+.global _start
+
+# ============================================================
+# M-mode 初始化與 Trap Handler 設置
+# ============================================================
+_start:
+    # 設置 Trap Handler
+    la      t0, trap_handler
+    csrw    mtvec, t0
+
+    # 設置 User Stack (簡化：使用固定位址)
+    li      sp, 0x80010000
+
+    # 準備切換到 U-mode
+    # mstatus.MPP = 0 (U-mode), mstatus.MPIE = 1
+    li      t0, (0 << 11) | (1 << 7)    # MPP=0 (U-mode), MPIE=1
+    csrw    mstatus, t0
+
+    # 設置返回位址 (mepc = user_code)
+    la      t0, user_code
+    csrw    mepc, t0
+
+    # 切換到 U-mode
+    mret
+
+# ============================================================
+# User Mode 程式碼 (U-mode)
+# ============================================================
+user_code:
+    # 這裡我們在 U-mode 執行
+
+    # 準備系統呼叫參數
+    li      a7, 100         # syscall number = 100 (自訂)
+    li      a0, 42          # arg0 = 42
+
+    # 按下電梯按鈕！
+    ecall                   # <-- 在這裡設置斷點觀察
+
+    # ecall 返回後，a0 包含返回值
+    # (此範例返回 a0 + 1 = 43)
+
+user_loop:
+    j       user_loop       # 無限迴圈
+
+# ============================================================
+# M-mode Trap Handler
+# ============================================================
+.align 4
+trap_handler:
+    # === 觀察點 1：讀取異常原因 ===
+    csrr    t0, mcause      # t0 = 異常原因
+    # U-mode ecall: mcause = 8 (Environment call from U-mode)
+
+    # === 觀察點 2：讀取異常發生位址 ===
+    csrr    t1, mepc        # t1 = 發生 ecall 的指令位址
+
+    # === 觀察點 3：讀取之前的特權狀態 ===
+    csrr    t2, mstatus     # mstatus.MPP 會顯示之前的模式
+
+    # 簡單的 syscall 處理：返回 a0 + 1
+    addi    a0, a0, 1       # 返回值 = 參數 + 1
+
+    # 跳過 ecall 指令 (ecall 是 4 bytes)
+    addi    t1, t1, 4
+    csrw    mepc, t1
+
+    # 返回 U-mode
+    mret
+```
+
+### 執行步驟
+
+**1. 編譯程式**
+
+```bash
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -T linker.ld \
+    -o ecall_elevator.elf ecall_elevator.S
+```
+
+**2. 在 QEMU 中啟動並連接 GDB**
+
+```bash
+# 終端 1：啟動 QEMU
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel ecall_elevator.elf -S -gdb tcp::1234
+
+# 終端 2：連接 GDB
+riscv64-unknown-elf-gdb ecall_elevator.elf
+(gdb) target remote :1234
+(gdb) break trap_handler
+(gdb) continue
+```
+
+**3. 觀察關鍵暫存器**
+
+當斷點觸發時，在 GDB 中執行：
+
+```gdb
+# 查看異常原因
+(gdb) print/x $mcause
+# 預期：0x8 (Environment call from U-mode)
+
+# 查看 ecall 指令位址
+(gdb) print/x $mepc
+# 預期：指向 user_code 中 ecall 的位址
+
+# 查看之前的特權狀態
+(gdb) print/x $mstatus
+# 檢查 MPP 位 (bit 12:11)：00 = U-mode
+```
+
+### 重要觀察
+
+| 暫存器 | 值 | 意義 |
+|--------|-----|------|
+| `mcause` | `0x8` | Exception Code 8 = Environment call from U-mode |
+| `mepc` | `ecall 位址` | Trap 發生時的指令位址 |
+| `mstatus.MPP` | `0b00` | 之前在 U-mode (00=U, 01=S, 11=M) |
+
+### 延伸思考
+
+> 💭 **問題**：為什麼 Trap Handler 需要把 `mepc + 4` 才返回？
+>
+> **答案**：如果不跳過 `ecall`，`mret` 會返回到同一個 `ecall` 指令，造成無限的 Trap 迴圈！這也是為什麼 danieRTOS 的 `syscall_handler` 中有 `ctx[CTX_MEPC] += 4` 這行程式碼。
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：裸機思維殘留
+
+**錯誤認知**：「我在嵌入式系統寫慣了裸機程式，RISC-V 應該也是直接存取 CSR 就好。」
+
+**真相**：許多 RISC-V 開發板運行的是 Linux，你的程式在 U-mode 執行，根本無法存取 M-mode 的 CSR。
+
+```c
+// ❌ 錯誤：在 Linux User Space 試圖讀取 mstatus
+#include <stdio.h>
+
+int main() {
+    unsigned long mstatus;
+    asm volatile ("csrr %0, mstatus" : "=r"(mstatus));
+    // 結果：Illegal Instruction Exception，程式被 SIGILL 殺掉
+    printf("mstatus = 0x%lx\n", mstatus);
+    return 0;
+}
+
+// ✅ 正確：使用系統呼叫取得系統資訊
+#include <stdio.h>
+#include <sys/utsname.h>
+
+int main() {
+    struct utsname buf;
+    uname(&buf);  // 透過 syscall 請求 kernel 幫我們查
+    printf("Machine: %s\n", buf.machine);
+    return 0;
+}
+```
+
+**診斷方法**：
+
+如果你的程式莫名其妙地 crash，先檢查是否有使用 `csrr`/`csrw` 存取 M-mode 或 S-mode 專用的 CSR。在 Linux 環境下，只有少數 CSR（如 `cycle`、`time`）可以從 U-mode 讀取。
+
+### 陷阱 2：忘記 ecall 後要跳過指令
+
+**症狀**：Trap Handler 處理完畢後，CPU 陷入無限 Trap 迴圈。
+
+**原因**：`mepc` 仍然指向 `ecall` 指令，`mret` 返回後又立刻執行 `ecall`，再次觸發 Trap。
+
+```assembly
+# ❌ 錯誤：沒有更新 mepc
+trap_handler:
+    csrr    t0, mcause
+    # ... 處理 syscall ...
+    mret                # 返回到同一個 ecall，無限迴圈！
+
+# ✅ 正確：跳過 ecall 指令
+trap_handler:
+    csrr    t0, mcause
+    csrr    t1, mepc
+    addi    t1, t1, 4   # ecall 是 4 bytes
+    csrw    mepc, t1
+    # ... 處理 syscall ...
+    mret                # 返回到 ecall 的下一條指令
+```
+
+### 陷阱 3：混淆 M/S/U 專用的 CSR
+
+**症狀**：想讀取 Trap 資訊，但用錯了 CSR 前綴。
+
+**說明**：RISC-V 的 CSR 根據特權級別有不同的前綴：
+
+| 前綴 | 特權級別 | 範例 |
+|------|---------|------|
+| `m` | Machine | `mstatus`, `mcause`, `mepc`, `mtvec` |
+| `s` | Supervisor | `sstatus`, `scause`, `sepc`, `stvec` |
+| 無 | User (部分可讀) | `cycle`, `time`, `instret` |
+
+```assembly
+# ❌ 錯誤：在 M-mode Trap Handler 中讀取 S-mode CSR
+trap_handler:
+    csrr    t0, scause      # 這讀的是 S-mode 的異常原因，不是當前的！
+
+# ✅ 正確：在 M-mode 使用 M-mode CSR
+trap_handler:
+    csrr    t0, mcause      # 讀取 M-mode 的異常原因
+```
+
+> 💡 **記憶技巧**：你在哪一層，就用那一層的 CSR。M-mode 用 `m*`，S-mode 用 `s*`。
 
 ---
 

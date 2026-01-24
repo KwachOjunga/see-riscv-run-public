@@ -4,6 +4,48 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand the Fragmentation Problem**: Grasp how ISA Fragmentation harms software ecosystems
+2. **Distinguish Profile Types**: Understand the use-case differences between RVA (Application) and RVM (Microcontroller)
+3. **Decode Profile Names**: Interpret the meaning of names like RVA22S, RVM23
+
+---
+
+## 💡 Scenario: À La Carte or Set Menu?
+
+> **Scene**: Junior has multiple chip vendor spec sheets spread across the desk, looking bewildered.
+
+**Junior**: "Senior, I'm going cross-eyed looking at these spec sheets. This vendor says they support `RV64GC`, that one says `RVA22`, and another says `RVM23`. I just want to run Linux—which one do I pick? Can't it be as simple as buying an x86 computer?"
+
+**Senior**: "That's the downside of RISC-V being 'too free'—**Fragmentation**. Before, everyone assembled their own instruction sets: you want M, he wants F, I want C. Then you write software only to find that this CPU is missing an instruction, instant Crash."
+
+**Junior**: "So Profiles are meant to solve this?"
+
+**Senior**: "Exactly. Think of it as **officially certified set menus**:
+
+| Before (À la carte) | Now (Profile) |
+|---------------------|---------------|
+| Pick your own instruction set | Official pre-configured menu |
+| Forgot to order FPU = Linux won't boot | RVA22 label = guaranteed to run |
+| Verify compatibility for each product | One ISO runs all compliant hardware |
+
+**RVA (Application Profile)** is the 'deluxe menu' for rich operating systems like Linux/Android. If a vendor dares to slap the RVA22 label on their chip, they guarantee it has MMU, atomic instructions, floating-point, and everything else needed to run Linux."
+
+**Junior**: "What about RVM?"
+
+**Senior**: "**RVM (Microcontroller Profile)** is the 'economy menu' for RTOS or bare-metal. It drops heavy equipment like MMU, focusing on low power and real-time control. If you're just making a smart rice cooker, RVM is enough; but if you're making a smartphone, you definitely need RVA."
+
+**Junior**: "What about the numbers 20, 22, 23? Performance levels?"
+
+**Senior**: "Not performance—**year**. Like a '2022 model year' car. RVA22 represents standards defined in 2022, RVA23 adds some new features (like stronger vector instructions). Newer Linux distributions typically require newer Profile years."
+
+**Junior**: "Got it! So when choosing a CPU, I don't need to check instructions one by one anymore—just confirm it meets the Profile menu I need!"
+
+---
+
 RISC-V's modularity is both a strength and a challenge. The base ISA is minimal, and implementations choose which extensions to include. This flexibility enables optimization for specific use cases—a microcontroller might include only RV32IMC, while a server processor might implement RV64IMAFDCV. But this variability creates a problem: how does software know what features are available?
 
 Platform profiles solve this by defining standard combinations of extensions for specific use cases. A profile specifies mandatory extensions, optional extensions, and implementation requirements. Software targeting a profile can assume certain features exist, simplifying development and improving portability. The RVA22 profile defines requirements for application processors running rich operating systems. The RVA23 profile adds newer extensions and stricter requirements. Embedded profiles target microcontrollers and real-time systems.
@@ -465,6 +507,166 @@ Compared to ESP32 (Xtensa):
 - Better toolchain (GCC, LLVM)
 - Open ISA (vs proprietary Xtensa)
 - Growing ecosystem
+
+---
+
+## 🛠️ Hands-on Lab: Lab 14.1 — Profile Detector
+
+This lab demonstrates how to detect which Extensions the current hardware supports—key to understanding Profile practical applications.
+
+### Lab Objectives
+
+1. Read the `misa` CSR to see supported Extensions
+2. Check if critical CSRs exist
+3. Determine which Profile level the current system meets
+
+### Code (profile_detect.c)
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// Read misa CSR (requires M-mode privilege)
+static inline uint64_t read_misa() {
+    uint64_t val;
+    asm volatile ("csrr %0, misa" : "=r" (val));
+    return val;
+}
+
+// Extension check (misa bit mapping: A=0, B=1, ..., Z=25)
+#define HAS_EXT(misa, letter) ((misa) & (1UL << ((letter) - 'A')))
+
+void check_profile(uint64_t misa) {
+    printf("=== RISC-V Profile Detector ===\n\n");
+
+    // Check XLEN (MXL field in misa[63:62])
+    int xlen = (misa >> 62) == 2 ? 64 : 32;
+    printf("Base: RV%d\n", xlen);
+
+    // List supported Extensions
+    printf("Extensions: ");
+    for (char c = 'A'; c <= 'Z'; c++) {
+        if (HAS_EXT(misa, c)) {
+            printf("%c", c);
+        }
+    }
+    printf("\n\n");
+
+    // RVA22 minimum requirements check
+    int has_m = HAS_EXT(misa, 'M');  // Integer Multiply
+    int has_a = HAS_EXT(misa, 'A');  // Atomics
+    int has_f = HAS_EXT(misa, 'F');  // Single-precision Float
+    int has_d = HAS_EXT(misa, 'D');  // Double-precision Float
+    int has_c = HAS_EXT(misa, 'C');  // Compressed
+
+    printf("--- Profile Compatibility ---\n");
+
+    // RVA22 requires: RV64IMAFDC + more
+    if (xlen == 64 && has_m && has_a && has_f && has_d && has_c) {
+        printf("[✓] RVA22 basic requirements: PASS\n");
+        printf("    (Additional checks needed: Zba, Zbb, Zbs, Sv39, PMP>=8)\n");
+    } else {
+        printf("[✗] RVA22 basic requirements: FAIL\n");
+        if (xlen != 64) printf("    Missing: 64-bit base\n");
+        if (!has_m) printf("    Missing: M (Multiply)\n");
+        if (!has_a) printf("    Missing: A (Atomics)\n");
+        if (!has_f) printf("    Missing: F (Float)\n");
+        if (!has_d) printf("    Missing: D (Double)\n");
+        if (!has_c) printf("    Missing: C (Compressed)\n");
+    }
+
+    // RVM (Microcontroller) compatibility is more relaxed
+    if (has_m && has_c) {
+        printf("[✓] RVM basic requirements: PASS (RV32/64 + M + C)\n");
+    }
+}
+
+int main() {
+    uint64_t misa = read_misa();
+
+    if (misa == 0) {
+        printf("Error: Cannot read misa (not in M-mode?)\n");
+        return 1;
+    }
+
+    check_profile(misa);
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile (requires M-mode execution environment)
+riscv64-unknown-elf-gcc -march=rv64gc -o profile_detect profile_detect.c
+
+# Run on Spike (M-mode simulation)
+spike pk profile_detect
+```
+
+### Expected Output (QEMU virt machine)
+
+```text
+=== RISC-V Profile Detector ===
+
+Base: RV64
+Extensions: ACDFIMSU
+
+--- Profile Compatibility ---
+[✓] RVA22 basic requirements: PASS
+    (Additional checks needed: Zba, Zbb, Zbs, Sv39, PMP>=8)
+[✓] RVM basic requirements: PASS (RV32/64 + M + C)
+```
+
+### Key Takeaways
+
+1. **misa CSR**: Single read reveals all standard extensions
+2. **Profile != Full Compliance**: Even if IMAFDC is present, RVA22 still needs additional features like Zba, Zbb, Zbs, Sv39, and 8+ PMP entries
+3. **Runtime Detection**: Production code should check features at boot, not assume
+
+> **danieRTOS Reference**: danieRTOS checks for M extension at startup to decide whether to use hardware or software multiply.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Profile Version ≠ Performance
+
+**Misconception**: "RVA23 is 10% faster than RVA22"
+
+**Truth**: Profile version only represents the **feature set's year**, not clock speed or hardware performance.
+
+```text
+RVA22 @ 2.0 GHz could be much faster than RVA23 @ 1.0 GHz!
+
+Profiles define "software compatibility", not "hardware performance".
+```
+
+### Pitfall 2: Thinking RV64G = RVA22
+
+**Error Scenario**: Seeing vendor claim `RV64GC` support and assuming latest Fedora will run.
+
+**Truth**: RVA22 requires additional Extensions and hardware features:
+
+| Requirement | RV64GC | RVA22 |
+|-------------|--------|-------|
+| IMAFDCSU | ✓ | ✓ |
+| Zba, Zbb, Zbs | ✗ | ✓ (Mandatory) |
+| Sv39 (MMU) | Not specified | ✓ (Mandatory) |
+| PMP ≥ 8 entries | Not specified | ✓ (Mandatory) |
+
+### Pitfall 3: Ignoring Profile Backward Compatibility
+
+**Error Scenario**: Programs compiled for RVA23 won't run on RVA22 hardware.
+
+**Correct Understanding**:
+
+```text
+RVA22 software → RVA23 hardware  ✓ (Forward compatible)
+RVA23 software → RVA22 hardware  ✗ (May use new instructions)
+```
+
+> 💡 **Recommendation**: For maximum compatibility, specify an older Profile as your compilation target.
 
 ---
 

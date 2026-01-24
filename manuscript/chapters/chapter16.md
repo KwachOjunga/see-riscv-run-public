@@ -4,6 +4,47 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Read Performance Counters**: Use `csrr` to read `cycle` and `instret` CSRs
+2. **Calculate IPC Metrics**: Understand the meaning and formula for Instructions Per Cycle
+3. **Identify Performance Bottlenecks**: Distinguish characteristics of Compute-bound vs Memory-bound programs
+
+---
+
+## 💡 Scenario: The CPU's Indigestion
+
+> **Scene**: Junior comes running to Senior with a data sheet.
+
+**Junior**: "Senior, look! I unrolled this loop, which made more instructions, but the execution time actually got shorter. That doesn't make sense! More instructions should mean slower, right?"
+
+**Senior**: "That's a common rookie mistake—only looking at 'food quantity' (Instruction Count), not 'digestion speed' (IPC).
+
+A CPU is like a hot dog eating contest competitor:
+
+| Concept | Analogy |
+|---------|---------|
+| **Cycle** | Contest time (seconds) |
+| **Instret (Instructions)** | Number of hot dogs eaten |
+| **IPC (Instructions Per Cycle)** | Swallowing speed |
+
+Formula: `IPC = Instret / Cycle`
+"
+
+**Junior**: "So after I unrolled the loop, even though there are more hot dogs, they're being swallowed faster?"
+
+**Senior**: "Exactly. Your previous code probably had 'Data Dependencies'—the previous bite wasn't swallowed yet, so the next bite couldn't go in, causing the competitor to just stand there dazed (Pipeline Stall), resulting in low IPC.
+
+After loop unrolling, instructions don't interfere with each other, so the CPU can swallow several at once (Pipeline filled), and IPC goes up. So even though total instruction count increased, because swallowing is fast enough, total time actually decreased."
+
+**Junior**: "I see! So higher IPC is always better?"
+
+**Senior**: "Not necessarily. If you just have them drink water (execute `nop`), they can swallow super fast (high IPC), but they're not actually eating anything (no useful work). So when looking at performance, we must look at **Cycle Count** and **IPC** together."
+
+---
+
 Performance optimization requires measurement. A program runs slowly, and we need to know why. Cache misses dominate execution time, or branch mispredictions cause pipeline stalls, or memory bandwidth limits throughput. Performance counters transform vague slowness into quantifiable bottlenecks.
 
 RISC-V provides a Performance Monitoring Unit (PMU) through a set of hardware performance counters. These counters track events like cycles executed, instructions retired, cache hits and misses, branch predictions, and TLB accesses. The basic counters (cycle, instret, time) are mandatory and provide fundamental metrics. Hardware performance counters (mhpmcounter3-31) are optional and track implementation-specific events. Together, these counters enable profiling, bottleneck identification, and performance analysis.
@@ -669,6 +710,210 @@ RISC-V's dedicated instret counter simplifies IPC measurement.
 - Neoverse N1: 6 PMU counters
 
 RISC-V implementations vary widely in HPM counter count. ARM implementations are more consistent (typically 6 counters).
+
+---
+
+## 🛠️ Hands-on Lab: Lab 16.1 — The CPU's EKG (Measuring IPC)
+
+This lab demonstrates how to read hardware performance counters and calculate IPC.
+
+> ⚠️ **Important Warning**: In QEMU TCG mode or Spike, `cycle` usually just follows `instret` (IPC ≈ 1), which doesn't reflect real hardware pipeline behavior. Run on real hardware to observe significant differences.
+
+### Lab Objectives
+
+1. Implement C functions to read `cycle` and `instret`
+2. Design two workloads: High dependency (low IPC) vs High parallelism (high IPC)
+3. Calculate and print IPC
+
+### Code (pmu_lab.c)
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// ---------------------------------------------------------
+// Helper Functions: Read CSRs
+// ---------------------------------------------------------
+static inline uint64_t read_cycle() {
+    uint64_t val;
+    asm volatile ("csrr %0, cycle" : "=r" (val));
+    return val;
+}
+
+static inline uint64_t read_instret() {
+    uint64_t val;
+    asm volatile ("csrr %0, instret" : "=r" (val));
+    return val;
+}
+
+// ---------------------------------------------------------
+// Workload 1: High Dependency (Low IPC)
+// ---------------------------------------------------------
+void workload_dependency(int iters) {
+    volatile int a = 1;
+    for (int i = 0; i < iters; i++) {
+        // Each add must wait for previous to complete
+        asm volatile (
+            "add %0, %0, %0 \n"
+            "add %0, %0, %0 \n"
+            "add %0, %0, %0 \n"
+            : "+r" (a)
+        );
+    }
+}
+
+// ---------------------------------------------------------
+// Workload 2: Independent (High IPC)
+// ---------------------------------------------------------
+void workload_independent(int iters) {
+    volatile int a = 1, b = 2, c = 3;
+    for (int i = 0; i < iters; i++) {
+        // Instructions are independent, CPU can issue simultaneously
+        asm volatile (
+            "add %0, %0, %0 \n"
+            "add %1, %1, %1 \n"
+            "add %2, %2, %2 \n"
+            : "+r" (a), "+r" (b), "+r" (c)
+        );
+    }
+}
+
+// ---------------------------------------------------------
+// Measurement Function
+// ---------------------------------------------------------
+void measure(const char* name, void (*func)(int), int iters) {
+    uint64_t start_c = read_cycle();
+    uint64_t start_i = read_instret();
+
+    func(iters);
+
+    uint64_t end_c = read_cycle();
+    uint64_t end_i = read_instret();
+
+    uint64_t delta_c = end_c - start_c;
+    uint64_t delta_i = end_i - start_i;
+    double ipc = (double)delta_i / delta_c;
+
+    printf("[%s]\n", name);
+    printf("  Cycles : %lu\n", delta_c);
+    printf("  Instrs : %lu\n", delta_i);
+    printf("  IPC    : %.2f\n\n", ipc);
+}
+
+int main() {
+    printf("=== RISC-V PMU Demo ===\n");
+    printf("Warning: On QEMU/Spike, IPC is simulated as ~1.0\n");
+    printf("Run on real hardware for accurate results.\n\n");
+
+    int iters = 100000;
+    measure("Dependent Workload", workload_dependency, iters);
+    measure("Independent Workload", workload_independent, iters);
+
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -O0 -o pmu_lab pmu_lab.c
+
+# Run on Spike (simulated, IPC ≈ 1)
+spike pk pmu_lab
+
+# On real hardware, expect:
+# - Dependent Workload: IPC ≈ 0.3-0.5 (stalls)
+# - Independent Workload: IPC ≈ 1.5-2.0 (parallel)
+```
+
+### Expected Output (Real Hardware)
+
+```text
+=== RISC-V PMU Demo ===
+Warning: On QEMU/Spike, IPC is simulated as ~1.0
+Run on real hardware for accurate results.
+
+[Dependent Workload]
+  Cycles : 1200000
+  Instrs : 400000
+  IPC    : 0.33
+
+[Independent Workload]
+  Cycles : 240000
+  Instrs : 400000
+  IPC    : 1.67
+```
+
+> **danieRTOS Reference**: danieRTOS uses cycle counters in its scheduler to measure context switch overhead and task execution time.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Higher IPC = Faster Program?
+
+**Misconception**: The optimization goal is to maximize IPC.
+
+**Truth**: High IPC doesn't necessarily mean fast programs.
+
+```c
+// Super high IPC, but does no useful work
+for (int i = 0; i < 1000000; i++) {
+    asm volatile ("nop");  // IPC might approach 4.0!
+}
+
+// Lower IPC, but actually doing computation
+for (int i = 0; i < 1000000; i++) {
+    result += array[i];    // IPC might only be 0.5
+}
+```
+
+> 💡 **Correct Understanding**: Performance = `Instret / Time` or `Instret / Cycle`, but only if those instructions do useful work.
+
+### Pitfall 2: Ignoring Counter Overflow
+
+**Error Scenario**: After long execution, counter overflows causing negative results.
+
+**Solution**: Use 64-bit counters (RV64) or correctly handle 32-bit counter overflow.
+
+```c
+// RV32: Need to read cycleh (high 32 bits)
+uint64_t read_cycle_rv32() {
+    uint32_t lo, hi1, hi2;
+    do {
+        hi1 = read_csr(cycleh);
+        lo  = read_csr(cycle);
+        hi2 = read_csr(cycleh);
+    } while (hi1 != hi2);  // Guard against overflow during read
+    return ((uint64_t)hi1 << 32) | lo;
+}
+```
+
+### Pitfall 3: Confusing cycle and time
+
+**Error Scenario**: Using `cycle` to measure sleep time.
+
+**Truth**:
+
+| CSR | Behavior |
+|-----|----------|
+| `cycle` | Tracks CPU execution cycles, **stops** during WFI |
+| `time` | Tracks real time, **continues** during WFI |
+
+```c
+// ❌ Wrong: cycle doesn't increment during WFI
+start = read_cycle();
+wfi();  // Wait for interrupt
+end = read_cycle();
+sleep_time = end - start;  // Result is nearly 0!
+
+// ✅ Correct: Use time for sleep measurement
+start = read_time();
+wfi();
+end = read_time();
+sleep_time = end - start;  // Correctly reflects wait time
+```
 
 ---
 

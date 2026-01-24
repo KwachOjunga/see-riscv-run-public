@@ -6,10 +6,10 @@
 
 **A Comprehensive Guide to RISC-V Architecture**
 
-**Copyright © 2025 Danny Jiang**
+**Copyright © 2025-2026 Danny Jiang**
 
-- **Version**: Draft v0p10
-- **Published**: December 2025
+- **Version**: Draft v0p11 (Enhanced Edition)
+- **Published**: January 2026
 - **Author**: Danny Jiang
 - **Contact**: djiang.tw@gmail.com
 
@@ -58,8 +58,9 @@ This is the complete book "See RISC-V Run: Fundamentals". The book contains:
 
 - **17 Chapters** organized into 10 Parts
 - **6 Appendices** with quick reference materials
-- **~146,600 words** (~500 pages)
+- **~160,000+ words** (~550 pages)
 - Comprehensive coverage from ISA fundamentals to system design
+- **v0p11 Enhanced**: Learning Objectives, Scenario Dialogues, Hands-on Labs, Common Pitfalls
 
 ---
 
@@ -69,4 +70,4 @@ This is the complete book "See RISC-V Run: Fundamentals". The book contains:
 
 ---
 
-**First Edition, December 2025**
+**Enhanced Edition, January 2026**

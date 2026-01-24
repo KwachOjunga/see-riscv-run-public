@@ -4,6 +4,48 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **讀取效能計數器**：使用 `csrr` 讀取 `cycle` 和 `instret` CSR
+2. **計算 IPC 指標**：理解 Instructions Per Cycle 的意義與計算公式
+3. **識別效能瓶頸**：區分 Compute-bound 與 Memory-bound 的特徵
+
+---
+
+## 💡 情境引入：CPU 的消化不良
+
+> **場景**：小華拿著一張數據表跑來找阿杰。
+
+**小華**：「杰哥，你看！我把這個迴圈展開 (Unroll)，指令變多了，結果執行時間反而變短了。這不科學吧？指令越多不是應該跑越慢嗎？」
+
+**阿杰**：「這就是新手常犯的錯——只看『食量』(Instruction Count)，不看『消化速度』(IPC)。
+
+CPU 就像一個吃熱狗大賽的選手：
+
+| 概念 | 比喻 |
+|-----|------|
+| **Cycle (週期)** | 比賽的時間（秒數） |
+| **Instret (指令數)** | 吃掉的熱狗數量 |
+| **IPC (Instructions Per Cycle)** | 吞嚥的速度 |
+
+公式：`IPC = Instret / Cycle`
+
+」
+
+**小華**：「所以我的迴圈展開後，雖然熱狗變多了，但他吞得更快？」
+
+**阿杰**：「沒錯。之前的程式可能因為『資料相依性』(Data Dependency)，上一口還沒吞下去，下一口就塞不進來，導致選手常常在那邊發呆（Pipeline Stall），IPC 很低。
+
+你展開迴圈後，讓指令之間互不干擾，CPU 可以一口氣吞好幾根（Pipeline 填滿），IPC 變高了。所以雖然總指令數增加，但因為吞得夠快，總時間反而短了。」
+
+**小華**：「原來如此！所以 IPC 越高越好囉？」
+
+**阿杰**：「也不一定。如果你只是讓他一直喝水（執行 `nop`），他可以吞得飛快（IPC 很高），但根本沒吃飽（沒做有用功）。所以我們看效能，必須同時看 **Cycle Count** 和 **IPC**。」
+
+---
+
 Performance optimization 需要測量。程式執行緩慢，我們需要知道原因。Cache miss 主導執行時間，或 branch misprediction 導致 pipeline stall，或 memory bandwidth 限制 throughput。Performance counter 將模糊的緩慢轉化為可量化的 bottleneck。
 
 RISC-V 通過一組 hardware performance counter 提供 Performance Monitoring Unit (PMU)。這些 counter 追蹤 event，如執行的 cycle、retired instruction、cache hit 和 miss、branch prediction、TLB access。基本 counter（cycle、instret、time）是強制性的，提供基本 metric。Hardware performance counter（mhpmcounter3-31）是可選的，追蹤 implementation-specific event。這些 counter 共同實現 profiling、bottleneck identification 和 performance analysis。
@@ -669,6 +711,228 @@ RISC-V 的專用 instret counter 簡化了 IPC 測量。
 - Neoverse N1：6 個 PMU counter
 
 RISC-V implementation 在 HPM counter 數量上差異很大。ARM implementation 更一致（通常 6 個 counter）。
+
+---
+
+## 🛠️ 實作練習：Lab 16.1 — CPU 的心電圖 (Measuring IPC)
+
+這個 Lab 將展示如何讀取硬體效能計數器並計算 IPC。
+
+> ⚠️ **重要警告**：在 QEMU TCG 模式或 Spike 中，`cycle` 通常只是跟隨 `instret` 增加 (IPC ≈ 1)，無法反映真實硬體的 Pipeline 行為。請在真實硬體上執行以觀察顯著差異。
+
+### 實驗目標
+
+1. 實作讀取 `cycle` 與 `instret` 的 C 語言函式
+2. 設計兩種負載：相依性高 (低 IPC) vs 平行度高 (高 IPC)
+3. 計算並印出 IPC
+
+### 程式碼 (pmu_lab.c)
+
+```c
+#include <stdio.h>
+#include <stdint.h>
+
+// ---------------------------------------------------------
+// Helper Functions: 讀取 CSR
+// ---------------------------------------------------------
+static inline uint64_t read_cycle() {
+    uint64_t val;
+    asm volatile ("csrr %0, cycle" : "=r" (val));
+    return val;
+}
+
+static inline uint64_t read_instret() {
+    uint64_t val;
+    asm volatile ("csrr %0, instret" : "=r" (val));
+    return val;
+}
+
+// ---------------------------------------------------------
+// Workload 1: High Dependency (低 IPC)
+// ---------------------------------------------------------
+void workload_dependency(int iters) {
+    volatile int a = 1;
+    for (int i = 0; i < iters; i++) {
+        // 每個 add 必須等上一個完成
+        asm volatile (
+            "add %0, %0, %0 \n"
+            "add %0, %0, %0 \n"
+            "add %0, %0, %0 \n"
+            : "+r" (a)
+        );
+    }
+}
+
+// ---------------------------------------------------------
+// Workload 2: Independent (高 IPC)
+// ---------------------------------------------------------
+void workload_independent(int iters) {
+    volatile int a = 1, b = 2, c = 3;
+    for (int i = 0; i < iters; i++) {
+        // 指令之間無關，CPU 可以同時發射
+        asm volatile (
+            "add %0, %0, %0 \n"
+            "add %1, %1, %1 \n"
+            "add %2, %2, %2 \n"
+            : "+r" (a), "+r" (b), "+r" (c)
+        );
+    }
+}
+
+// ---------------------------------------------------------
+// Measurement Function
+// ---------------------------------------------------------
+void measure(const char* name, void (*func)(int), int iters) {
+    uint64_t start_c = read_cycle();
+    uint64_t start_i = read_instret();
+
+    func(iters);
+
+    uint64_t end_c = read_cycle();
+    uint64_t end_i = read_instret();
+
+    uint64_t delta_c = end_c - start_c;
+    uint64_t delta_i = end_i - start_i;
+    double ipc = (double)delta_i / delta_c;
+
+    printf("[%s]\n", name);
+    printf("  Cycles : %lu\n", delta_c);
+    printf("  Instrs : %lu\n", delta_i);
+    printf("  IPC    : %.2f\n\n", ipc);
+}
+
+int main() {
+    printf("=== RISC-V PMU Demo ===\n");
+    printf("Warning: On QEMU/Spike, IPC is simulated as ~1.0\n");
+    printf("Run on real hardware for accurate results.\n\n");
+
+    int iters = 100000;
+    measure("Dependent Workload", workload_dependency, iters);
+    measure("Independent Workload", workload_independent, iters);
+
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯 (使用 -O0 避免優化干擾)
+riscv64-unknown-elf-gcc -O0 -o pmu_lab pmu_lab.c
+
+# 執行 (QEMU)
+qemu-riscv64 pmu_lab
+```
+
+### 預期結果
+
+**QEMU/Spike (功能模擬器)**：
+
+```text
+=== RISC-V PMU Demo ===
+Warning: On QEMU/Spike, IPC is simulated as ~1.0
+
+[Dependent Workload]
+  Cycles : 1500123
+  Instrs : 1500123
+  IPC    : 1.00
+
+[Independent Workload]
+  Cycles : 1500456
+  Instrs : 1500456
+  IPC    : 1.00
+```
+
+**真實硬體 (如 SiFive U74)**：
+
+```text
+[Dependent Workload]
+  Cycles : 2100000
+  Instrs : 1500000
+  IPC    : 0.71    ← 低 IPC (受 Dependency 影響)
+
+[Independent Workload]
+  Cycles : 900000
+  Instrs : 1500000
+  IPC    : 1.67    ← 高 IPC (Dual-issue 發揮作用)
+```
+
+### 觀察重點
+
+| 模擬器類型 | cycle 行為 | IPC 準確性 |
+|-----------|-----------|-----------|
+| **QEMU TCG** | cycle ≈ instret | ❌ 不準 |
+| **Spike** | cycle ≈ instret | ❌ 不準 |
+| **Gem5** | 週期精確模擬 | ✅ 準確 |
+| **真實硬體** | 真實計數 | ✅ 準確 |
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：IPC 越高 = 程式越快？
+
+**錯誤認知**：優化目標是最大化 IPC。
+
+**真相**：高 IPC 不一定代表程式快。
+
+```c
+// 超高 IPC，但沒做任何有用功
+for (int i = 0; i < 1000000; i++) {
+    asm volatile ("nop");  // IPC 可能接近 4.0！
+}
+
+// 較低 IPC，但實際完成了計算
+for (int i = 0; i < 1000000; i++) {
+    result += array[i];    // IPC 可能只有 0.5
+}
+```
+
+> 💡 **正確理解**：效能 = `Instret / Time` 或 `Instret / Cycle`，但前提是這些指令做了有用的工作。
+
+### 陷阱 2：忽略 Counter Overflow
+
+**錯誤情境**：長時間執行後，計數器溢位導致結果為負數。
+
+**解決**：使用 64-bit counter (RV64) 或正確處理 32-bit counter 的溢位。
+
+```c
+// RV32: 需要讀取 cycleh (高 32 位)
+uint64_t read_cycle_rv32() {
+    uint32_t lo, hi1, hi2;
+    do {
+        hi1 = read_csr(cycleh);
+        lo  = read_csr(cycle);
+        hi2 = read_csr(cycleh);
+    } while (hi1 != hi2);  // 防止讀取中途溢位
+    return ((uint64_t)hi1 << 32) | lo;
+}
+```
+
+### 陷阱 3：混淆 cycle 與 time
+
+**錯誤情境**：用 `cycle` 計算睡眠時間。
+
+**真相**：
+
+| CSR | 行為 |
+|-----|------|
+| `cycle` | 追蹤 CPU 執行週期，WFI 期間**停止** |
+| `time` | 追蹤實際時間，WFI 期間**繼續** |
+
+```c
+// ❌ 錯誤：cycle 在 WFI 期間不增加
+start = read_cycle();
+wfi();  // 等待中斷
+end = read_cycle();
+sleep_time = end - start;  // 結果幾乎為 0！
+
+// ✅ 正確：使用 time 計算睡眠時間
+start = read_time();
+wfi();
+end = read_time();
+sleep_time = end - start;  // 正確反映等待時間
+```
 
 ---
 

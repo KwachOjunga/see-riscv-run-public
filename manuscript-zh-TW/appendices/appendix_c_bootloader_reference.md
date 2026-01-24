@@ -4,6 +4,207 @@
 
 ---
 
+> 💡 **使用指南**：本附錄是啟動專案的「啟動盤」。當你需要從零開始寫 Bare-metal 程式時，直接複製這裡的模板。
+
+---
+
+## 🚀 最小可行啟動模板 (Copy-Paste Ready)
+
+### Minimal Linker Script (`link.ld`)
+
+這是 Bare-metal 專案最常被複製貼上的檔案：
+
+```ld
+/* link.ld - QEMU virt machine 用 */
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+MEMORY {
+    RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M
+}
+
+SECTIONS {
+    . = 0x80000000;
+
+    .text : {
+        *(.text.boot)       /* 確保啟動碼在最前面 */
+        *(.text .text.*)
+    } > RAM
+
+    .rodata : {
+        *(.rodata .rodata.*)
+    } > RAM
+
+    .data : {
+        *(.data .data.*)
+    } > RAM
+
+    .bss : {
+        _bss_start = .;
+        *(.bss .bss.*)
+        *(COMMON)
+        _bss_end = .;
+    } > RAM
+
+    . = ALIGN(16);
+    . = . + 0x4000;         /* 預留 16KB Stack */
+    _stack_top = .;
+}
+```
+
+### Minimal Entry Point (`entry.S`)
+
+```assembly
+# entry.S - 最小啟動碼
+.section .text.boot
+.global _start
+
+_start:
+    # 1. 設定 Stack Pointer
+    la sp, _stack_top
+
+    # 2. 清除 BSS 段
+    la t0, _bss_start
+    la t1, _bss_end
+clear_bss:
+    bge t0, t1, bss_done
+    sd zero, 0(t0)
+    addi t0, t0, 8
+    j clear_bss
+bss_done:
+
+    # 3. 跳轉到 C 語言 main
+    call main
+
+    # 4. main 返回後停機
+halt:
+    wfi
+    j halt
+```
+
+### Minimal Main (`main.c`)
+
+```c
+// main.c - 最小 Hello World (UART)
+#define UART_BASE 0x10000000  // QEMU virt UART 地址
+
+void uart_putc(char c) {
+    volatile char *uart = (volatile char *)UART_BASE;
+    *uart = c;
+}
+
+void uart_puts(const char *s) {
+    while (*s) uart_putc(*s++);
+}
+
+int main(void) {
+    uart_puts("Hello, RISC-V!\n");
+    return 0;
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -nostdlib -T link.ld \
+    -o hello.elf entry.S main.c
+
+# 執行
+qemu-system-riscv64 -machine virt -nographic \
+    -kernel hello.elf
+```
+
+---
+
+## 📊 典型啟動流程圖
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                     Power-On Reset                          │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ZSBL (Zeroth-Stage Bootloader) - ROM                       │
+│  • PC = Reset Vector (0x1000 或 implementation-defined)     │
+│  • 初始化時脈、DRAM Controller                               │
+│  • 跳轉到 FSBL                                              │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  FSBL (First-Stage Bootloader) - Flash/ROM                  │
+│  • 初始化 SPI/SD 儲存裝置                                    │
+│  • 載入 OpenSBI 到 DRAM                                     │
+│  • 跳轉到 OpenSBI                                           │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  OpenSBI (M-mode Firmware)                                  │
+│  • 設定 PMP 保護 M-mode 記憶體                               │
+│  • 初始化 SBI 服務                                          │
+│  • 設定 medeleg/mideleg 委派 Trap                           │
+│  • 跳轉到 S-mode Kernel                                     │
+└─────────────────────────┬───────────────────────────────────┘
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Linux Kernel (S-mode)                                      │
+│  • 初始化 Page Table                                        │
+│  • 初始化驅動程式                                            │
+│  • 啟動 User Space                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：忘記設定 Stack Pointer
+
+**症狀**：程式一進入 C 函數就 Crash。
+
+**原因**：RISC-V 不會自動初始化 SP，必須在 Assembly 中手動設定。
+
+```assembly
+# ❌ 錯誤：直接跳到 main
+_start:
+    call main
+
+# ✅ 正確：先設定 SP
+_start:
+    la sp, _stack_top
+    call main
+```
+
+### 陷阱 2：Linker Script 段順序錯誤
+
+**症狀**：程式執行到一半跳到奇怪的地方。
+
+**原因**：`.text.boot` 沒有放在最前面，Reset Vector 跳到錯誤位置。
+
+```ld
+/* ❌ 錯誤：.text.boot 不在最前面 */
+.text : { *(.text) *(.text.boot) }
+
+/* ✅ 正確：.text.boot 放最前面 */
+.text : { *(.text.boot) *(.text) }
+```
+
+### 陷阱 3：UART 地址硬編碼
+
+**症狀**：在不同平台上 UART 輸出沒反應。
+
+**原因**：不同 SoC 的 UART 地址不同。
+
+| 平台 | UART 地址 |
+|------|----------|
+| QEMU virt | 0x10000000 |
+| SiFive HiFive | 0x10010000 |
+| Allwinner D1 | 0x02500000 |
+
+**建議**：使用 Device Tree 或 SBI Console 取代硬編碼。
+
+---
+
 本附錄提供最小化 RISC-V bootloader 的參考實現。此程式碼展示從 reset 到載入 operating system 所需的基本步驟。雖然生產環境的 bootloader（如 U-Boot）要複雜得多，但此範例說明了核心概念。
 
 ---

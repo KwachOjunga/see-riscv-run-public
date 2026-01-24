@@ -4,6 +4,163 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "safety manual" for multi-core synchronization. When you encounter mysterious bugs in lock-free code, check Memory Ordering here first.
+
+---
+
+## 🔄 Producer-Consumer Synchronization Pattern (Copy-Paste Ready)
+
+This is the most classic multi-core synchronization pattern, guaranteeing Consumer sees complete data written by Producer.
+
+### Producer (Core 0) - Write Side
+
+```assembly
+# Producer: Write data, then set Flag
+# s0 = data address, s1 = Flag address, t0 = data, t1 = Flag value
+
+    sw      t0, 0(s0)       # 1. Write Data
+    fence   w, w            # 2. Store-Store Fence: Ensure data written first
+    sw      t1, 0(s1)       # 3. Write Flag (Ready = 1)
+```
+
+**Explanation**: `fence w,w` ensures "data write" is visible to other cores before "Flag write".
+
+### Consumer (Core 1) - Read Side
+
+```assembly
+# Consumer: Wait for Flag, then read data
+# s0 = data address, s1 = Flag address
+
+wait_flag:
+    lw      t1, 0(s1)       # 1. Read Flag
+    beqz    t1, wait_flag   #    Wait for Flag to become Ready
+    fence   r, r            # 2. Load-Load Fence: Ensure Flag seen before reading Data
+    lw      t0, 0(s0)       # 3. Read Data
+```
+
+**Explanation**: `fence r,r` ensures "Flag read" completes before "Data read".
+
+### Complete C Example
+
+```c
+// Shared variables
+volatile int data = 0;
+volatile int flag = 0;
+
+// Producer (Core 0)
+void producer(void) {
+    data = 42;                          // Write data
+    asm volatile ("fence w, w" ::: "memory");  // Store-Store Fence
+    flag = 1;                           // Set Flag
+}
+
+// Consumer (Core 1)
+int consumer(void) {
+    while (flag == 0) { }               // Wait for Flag
+    asm volatile ("fence r, r" ::: "memory");  // Load-Load Fence
+    return data;                        // Read data (guaranteed to be 42)
+}
+```
+
+---
+
+## 📋 FENCE Usage Quick Reference
+
+| Scenario | FENCE Type | Description |
+|----------|-----------|-------------|
+| **Publish Data** | `fence w, w` | Ensure data visible before Flag |
+| **Consume Data** | `fence r, r` | Ensure Flag read before data |
+| **Release Lock** | `fence rw, w` | Ensure Critical Section ops complete before Unlock |
+| **Acquire Lock** | `fence r, rw` | Ensure ops after Lock don't execute early |
+| **Full Barrier** | `fence rw, rw` | Strongest Fence, no ops can cross |
+| **Self-Modify Code** | `fence.i` | After modifying instructions, flush I-cache |
+
+---
+
+## 🔐 Spinlock Example (Using Atomics)
+
+```assembly
+# acquire_lock: Use amoswap.w.aq to acquire lock
+# a0 = lock address, t0 = 1 (locked), t1 = result
+acquire_lock:
+    li      t0, 1
+retry:
+    amoswap.w.aq t1, t0, (a0)   # Atomic swap with Acquire
+    bnez    t1, retry           # If was 1 (locked), retry
+    ret                         # Successfully acquired lock
+
+# release_lock: Use amoswap.w.rl to release lock
+# a0 = lock address
+release_lock:
+    amoswap.w.rl zero, zero, (a0)  # Atomic write 0 with Release
+    ret
+```
+
+**Explanation**:
+
+- `.aq` (Acquire): Subsequent ops won't be moved before Lock
+- `.rl` (Release): Previous ops won't be moved after Unlock
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Thinking volatile Is Enough
+
+**Misconception**: C's `volatile` guarantees Memory Ordering.
+
+**Truth**: `volatile` only prevents compiler optimization, doesn't guarantee CPU-level Memory Ordering.
+
+```c
+// ❌ Wrong: Only volatile, may read stale data on multi-core
+volatile int data = 0;
+volatile int flag = 0;
+
+// Producer
+data = 42;
+flag = 1;  // CPU may reorder so flag is visible first!
+
+// ✅ Correct: Add fence
+data = 42;
+asm volatile ("fence w, w" ::: "memory");
+flag = 1;
+```
+
+### Pitfall 2: Fence in Wrong Position
+
+**Symptom**: Spinlock looks correct, but still has Race Condition.
+
+```c
+// ❌ Wrong: fence after unlock
+critical_section();
+unlock();
+asm volatile ("fence rw, w" ::: "memory");  // Too late!
+
+// ✅ Correct: fence before unlock (or use .rl)
+critical_section();
+asm volatile ("fence rw, w" ::: "memory");
+unlock();
+```
+
+### Pitfall 3: Forgetting fence.i
+
+**Symptom**: JIT or Self-modifying code executes old instructions.
+
+**Cause**: After modifying instructions, I-Cache still has old content.
+
+```c
+// ❌ Wrong: No fence.i after code modification
+memcpy(code_buffer, new_code, size);
+((void (*)(void))code_buffer)();  // May execute old instructions!
+
+// ✅ Correct: fence.i after modification
+memcpy(code_buffer, new_code, size);
+asm volatile ("fence.i" ::: "memory");
+((void (*)(void))code_buffer)();  // Now executes new instructions
+```
+
+---
+
 This appendix provides a quick reference for RISC-V's memory model (RVWMO). Understanding memory ordering is essential for writing correct concurrent code on RISC-V.
 
 ---

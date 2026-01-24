@@ -4,6 +4,50 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Distinguish In-Order from Out-of-Order**: Understand the performance differences and use cases of both execution models
+2. **Understand Register Renaming**: Know how Physical Registers eliminate False Dependencies (WAW/WAR)
+3. **Master ROB Mechanism**: Understand how the Reorder Buffer guarantees "out-of-order execution, in-order commit"
+4. **Recognize Speculative Execution**: Understand the principles and security risks (Spectre/Meltdown)
+5. **Use Performance Counters**: Calculate CPI using `mcycle` and `minstret`
+
+---
+
+## 💡 Scenario: The Michelin Restaurant Kitchen Philosophy
+
+> **Scene**: Junior is comparing benchmark results of two RISC-V cores and finds that despite similar frequencies, performance differs by a factor of two.
+
+**Junior**: "Professor, I looked at specs for two RISC-V cores. SiFive U74 and Alibaba C910 both run at about 1.5GHz, but the CoreMark scores differ by almost 2x! How is this possible?"
+
+**Professor**: "Have you ever been to a Michelin-star restaurant?"
+
+**Junior**: "Sure, but what does that have to do with CPUs?"
+
+**Professor**: "Imagine two restaurants.
+
+**The first one (In-Order)**: The chef strictly follows the order of tickets. If the first dish needs 10 minutes for ingredients to thaw, all other dishes must wait—even if the second dish's ingredients are already ready.
+
+**The second one (Out-of-Order)**: The chef looks at which dish has ingredients ready first and starts with that. While waiting for ingredients to thaw, the chef has already finished three other dishes."
+
+**Junior**: "So Out-of-Order means the CPU doesn't wait idly?"
+
+**Professor**: "Exactly. But this requires a smart 'restaurant manager' to coordinate:
+
+1. **Reservation Station**: Tracks what ingredients each dish needs; starts cooking when ingredients arrive.
+2. **Reorder Buffer**: Even though cooking order is scrambled, dishes must still be served in the order customers placed them—otherwise chaos ensues.
+3. **Register Renaming**: If two dishes both need 'eggs,' but they're actually different eggs, label them differently to avoid confusion."
+
+**Junior**: "Sounds complex. What's the cost?"
+
+**Professor**: "Transistor count explodes, and power consumption goes up with it. That's why phone 'big cores' are power-hungry while 'little cores' are efficient—big cores are usually Out-of-Order, little cores are In-Order."
+
+**Junior**: "Let's measure the actual performance difference!"
+
+---
+
 In Chapter 7, we explored the classic five-stage in-order pipeline. But modern processors go far beyond this simple model. Out-of-order (OOO) execution allows processors to dynamically reorder instructions to extract more parallelism, dramatically improving performance. While in-order processors execute instructions in program order and stall on dependencies, out-of-order processors can execute independent instructions while waiting for slow operations to complete.
 
 This chapter explores the microarchitectural techniques that enable high-performance RISC-V processors: register renaming to eliminate false dependencies, reorder buffers to maintain precise exceptions, speculative execution to execute beyond branches, and advanced branch prediction to minimize misprediction penalties. We'll examine the cache hierarchy that hides memory latency, and cache coherence protocols that maintain consistency across multiple cores. Understanding these techniques is essential for anyone designing high-performance RISC-V systems or optimizing code for modern processors.
@@ -618,6 +662,203 @@ The R10000 pioneered many techniques still used today. Modern RISC-V OOO cores l
 - Simple control-dominated code
 
 RISC-V's flexibility allows both in-order (Rocket, SiFive E/U-series) and OOO (BOOM, SiFive P-series) implementations, making it suitable for a wide range of applications.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 8.1 — The Truth Behind Performance Counters
+
+This lab guides you through using RISC-V's hardware performance counters to measure CPI (Cycles Per Instruction) of the same code under different conditions.
+
+### Lab Objectives
+
+1. Read `mcycle` (Machine Cycle Counter) and `minstret` (Machine Instructions Retired)
+2. Calculate CPI = Cycles / Instructions
+3. Observe how different code patterns affect CPI
+
+### Concept Explanation
+
+RISC-V provides two key performance counter CSRs:
+
+| CSR | Name | Description |
+|-----|------|-------------|
+| `mcycle` | Machine Cycle Counter | Clock cycles elapsed since reset |
+| `minstret` | Machine Instructions Retired | Instructions completed since reset |
+
+**CPI (Cycles Per Instruction)** = mcycle / minstret
+
+- CPI = 1.0: Ideal case, one instruction completes per cycle
+- CPI > 1.0: Stalls present (cache miss, hazard, etc.)
+- CPI < 1.0: Superscalar processor, multiple instructions complete per cycle
+
+### Code
+
+Create `lab8_perf.c`:
+
+```c
+// lab8_perf.c - Performance Counter Measurement
+#include <stdio.h>
+#include <stdint.h>
+
+// Read mcycle
+static inline uint64_t read_mcycle(void) {
+    uint64_t val;
+    asm volatile("csrr %0, mcycle" : "=r"(val));
+    return val;
+}
+
+// Read minstret
+static inline uint64_t read_minstret(void) {
+    uint64_t val;
+    asm volatile("csrr %0, minstret" : "=r"(val));
+    return val;
+}
+
+// Test function 1: Simple addition loop (no dependencies)
+volatile int result1;
+void test_independent(int n) {
+    int a = 0, b = 0, c = 0, d = 0;
+    for (int i = 0; i < n; i++) {
+        a += 1;
+        b += 2;
+        c += 3;
+        d += 4;
+    }
+    result1 = a + b + c + d;
+}
+
+// Test function 2: Addition loop with dependencies
+volatile int result2;
+void test_dependent(int n) {
+    int a = 0;
+    for (int i = 0; i < n; i++) {
+        a += 1;
+        a += a;  // depends on previous line's result
+        a += a;  // depends on previous line's result
+        a += a;  // depends on previous line's result
+    }
+    result2 = a;
+}
+
+void measure(const char *name, void (*func)(int), int n) {
+    uint64_t cycle_start = read_mcycle();
+    uint64_t instr_start = read_minstret();
+
+    func(n);
+
+    uint64_t cycle_end = read_mcycle();
+    uint64_t instr_end = read_minstret();
+
+    uint64_t cycles = cycle_end - cycle_start;
+    uint64_t instrs = instr_end - instr_start;
+
+    // Calculate CPI (multiply by 100 to avoid floating point)
+    uint64_t cpi_x100 = (cycles * 100) / instrs;
+
+    printf("%s:\n", name);
+    printf("  Cycles: %lu\n", cycles);
+    printf("  Instructions: %lu\n", instrs);
+    printf("  CPI: %lu.%02lu\n", cpi_x100 / 100, cpi_x100 % 100);
+}
+
+int main() {
+    int n = 100000;
+
+    printf("=== Performance Counter Lab ===\n\n");
+
+    measure("Independent Operations", test_independent, n);
+    printf("\n");
+    measure("Dependent Operations", test_dependent, n);
+
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -O2 -o lab8_perf lab8_perf.c
+
+# Run (requires M-mode access to mcycle/minstret)
+qemu-riscv64 lab8_perf
+```
+
+**Expected Output** (values vary by implementation):
+
+```
+=== Performance Counter Lab ===
+
+Independent Operations:
+  Cycles: 500123
+  Instructions: 700045
+  CPI: 0.71
+
+Dependent Operations:
+  Cycles: 1200456
+  Instructions: 800089
+  CPI: 1.50
+```
+
+### What You Just Did
+
+1. **Independent Operations**: Four parallel additions can be executed simultaneously by OOO processors, resulting in CPI < 1
+2. **Dependent Operations**: Each addition depends on the previous result, forcing sequential execution, resulting in CPI > 1
+
+> **danieRTOS Reference**: The scheduler uses similar performance measurement techniques to profile task execution time and optimize scheduling decisions.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Thinking Out-of-Order Is Always Better
+
+**Misconception**: "OoO processors are always faster than In-Order!"
+
+**Correct Understanding**:
+- OoO has heavier penalties on **Branch Misprediction** (more instructions to flush)
+- OoO may not be optimal in **power-constrained** scenarios (phones, IoT)
+- For **highly parallel** workloads (GPU-like), simple In-Order cores are often more efficient
+
+### Pitfall 2: Ignoring Spectre/Meltdown Risks
+
+**Misconception**: "Speculative Execution is just a performance optimization with no side effects."
+
+**Correct Understanding**:
+- Spectre and Meltdown attacks exploit **side-channel effects** of Speculative Execution
+- Even when mispredicted instructions are cancelled, their effects on **Cache** remain
+- Attackers can infer secret data by measuring Cache access timing
+
+```c
+// Simplified Spectre attack concept
+if (x < array1_size) {           // Bounds check
+    y = array2[array1[x] * 256]; // If x is out of bounds, this shouldn't execute
+}
+// But Speculative Execution may "execute first, ask questions later"
+// Even after discovering x is out of bounds and cancelling,
+// array2's cache state has leaked array1[x]'s value
+```
+
+### Pitfall 3: Confusing mcycle with time
+
+**Error Scenario**: Using `mcycle` to measure "real time."
+
+**Correct Understanding**:
+- `mcycle`: CPU clock cycles, tied to CPU frequency
+- `time`: Real time (usually from RTC or Timer)
+- If CPU frequency changes dynamically (DVFS), `mcycle` cannot be directly converted to time
+
+```c
+// ❌ Wrong: Assuming mcycle equals time
+uint64_t start = read_mcycle();
+do_something();
+uint64_t elapsed_ns = (read_mcycle() - start) * 1000000000 / CPU_FREQ;
+// If CPU frequency changed, this calculation is wrong
+
+// ✅ Correct: Use time CSR or SBI timer
+uint64_t start = read_time();
+do_something();
+uint64_t elapsed_ns = (read_time() - start) * 1000000000 / TIMER_FREQ;
+```
 
 ---
 

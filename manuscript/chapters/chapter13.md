@@ -4,6 +4,47 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand PMP's Role**: Grasp how Physical Memory Protection limits access at the hardware level
+2. **Distinguish TOR vs NAPOT**: Understand the configuration differences and use cases for each Address Matching Mode
+3. **Configure PMP Entries**: Set up read-only regions and intercept illegal writes
+4. **Understand PLIC Architecture**: Grasp how the Platform-Level Interrupt Controller operates
+5. **Integrate SoC Components**: Understand how CPU, Memory, and Peripherals connect via Interconnect
+
+---
+
+## 💡 Scenario: The Museum's Red Barrier Poles
+
+> **Scene**: Junior stares at a "Store Access Fault" exception code on the screen, looking confused.
+
+**Junior**: "Architect, this is so strange. I already turned off the MMU (virtual memory) and I'm using physical addresses directly to write to this variable. Why is the CPU still blocking me? Is the board broken?"
+
+**Architect**: "The board is fine. You just hit PMP (Physical Memory Protection)'s 'red barrier poles.'
+
+Imagine memory is a museum:
+
+| Mechanism | Analogy | Function |
+|-----------|---------|----------|
+| **MMU (Page Table)** | Tour map | Tells you where exhibits are (VA → PA) |
+| **PMP** | Red barrier poles + bulletproof glass | Hardware security, limits who can touch what |
+
+Even if you bypass the tour guide (turn off MMU) and rush straight to the Mona Lisa, the hardware security (PMP Checker) will still stop you, because your ID (Privilege Mode) says you're just an ordinary visitor (S-mode/U-mode), and this area is only accessible to the museum director (M-mode)."
+
+**Junior**: "So how do I set up these barrier poles? Do I need start and end addresses?"
+
+**Architect**: "There are two common ways to set up the barriers:
+
+1. **TOR (Top of Range)**: Like stretching a rope. You need two poles (two PMP Entries), and the area between them is the controlled region. Good for arbitrary-sized regions.
+
+2. **NAPOT (Naturally Aligned Power of Two)**: Like placing a fixed-size dome (4KB, 2MB...) over exhibits. You only need to set the center point and dome size—more resource-efficient (uses only one Entry).
+
+Today let's try using NAPOT to cover a 4KB region and make it 'read-only,' and see what happens to your program."
+
+---
+
 A RISC-V processor core doesn't operate in isolation. To build a complete system-on-chip (SoC), the core must integrate with memory controllers, interrupt controllers, I/O devices, and system interconnects. This integration determines how software accesses hardware, how devices communicate, and how the system maintains security and performance.
 
 RISC-V provides a modular approach to SoC design. Unlike monolithic architectures that prescribe specific peripheral implementations, RISC-V defines standard interfaces while allowing flexibility in implementation. The Physical Memory Protection (PMP) unit controls memory access in machine mode. The Platform-Level Interrupt Controller (PLIC) routes interrupts from devices to cores. Memory-mapped I/O (MMIO) provides a uniform mechanism for device access. System interconnects like TileLink and AXI connect components together.
@@ -671,6 +712,208 @@ dma_start_sg(device, sg_list, 2);
 1. **IOMMU**: Translate device addresses to physical addresses (see Section 13.2)
 
 2. **Physically contiguous buffers**: Allocate DMA buffers from reserved physical memory
+
+---
+
+## 🛠️ Hands-on Lab: Lab 13.1 — Memory Firewall (PMP Shield)
+
+This lab demonstrates PMP's core functionality: setting protection rules in M-mode, then switching to S-mode to attempt a violation.
+
+### Lab Objectives
+
+1. Configure PMP Entry 0 as **Read-Only (R=1, W=0)** to protect target variable
+2. Configure PMP Entry 1 as **Allow-All (R=1, W=1, X=1)** to let other code run normally
+3. Switch to S-mode and attempt a write to trigger Store Access Fault
+
+### NAPOT Encoding Principle
+
+NAPOT encoding can be abstract for beginners. The key formula is:
+
+```text
+pmpaddr = (base_addr >> 2) | ((size >> 3) - 1)
+
+Example: Protect a 4KB region starting at 0x80200000
+- Base = 0x80200000, Size = 4KB (0x1000)
+- 0x80200000 >> 2 = 0x20080000
+- (0x1000 >> 3) - 1 = 0x1FF
+- pmpaddr = 0x20080000 | 0x1FF = 0x200801FF
+```
+
+**Encoding Rules**:
+
+| pmpaddr low bits | Corresponding region size |
+|-----------------|--------------------------|
+| `...aaaaa0` | 8 bytes |
+| `...aaaa01` | 16 bytes |
+| `...aaa011` | 32 bytes |
+| `...a01111` | 128 bytes |
+| `...0111111111` | 4KB (what we use) |
+
+### Code (pmp_lab.S)
+
+```assembly
+.section .text
+.global _start
+
+_start:
+    # ---------------------------------------------------
+    # 1. Set up Trap Handler (catch Access Fault later)
+    # ---------------------------------------------------
+    la t0, trap_handler
+    csrw mtvec, t0
+
+    # ---------------------------------------------------
+    # 2. Configure PMP (in M-mode)
+    # ---------------------------------------------------
+
+    # [Target] Protect a 4KB region at 0x80200000
+    # Using NAPOT mode
+    li t0, 0x200801FF
+    csrw pmpaddr0, t0
+
+    # Entry 0: Enable + NAPOT + Read Only (R=1, W=0, X=0)
+    # PMP_R(1) | PMP_A_NAPOT(0x18) = 0x19
+
+    # Entry 1: Open other memory (Allow All)
+    # pmpaddr1 set to all 1s (max address), mode set to TOR
+    # PMP_R(1) | PMP_W(1) | PMP_X(1) | PMP_A_TOR(0x08) = 0x0F
+
+    # pmpcfg0 = (pmp1cfg << 8) | pmp0cfg = 0x0F19
+    li t0, -1
+    csrw pmpaddr1, t0
+
+    li t0, 0x0F19
+    csrw pmpcfg0, t0        # Firewall activated!
+
+    # ---------------------------------------------------
+    # 3. Drop to S-mode
+    # ---------------------------------------------------
+
+    # Set mstatus.MPP = 01 (Supervisor)
+    li t0, (3 << 11)
+    csrc mstatus, t0        # Clear MPP
+    li t0, (1 << 11)
+    csrs mstatus, t0        # Set MPP to 01 (S-mode)
+
+    la t0, s_mode_entry
+    csrw mepc, t0
+    mret                    # Jump! Identity becomes Supervisor
+
+s_mode_entry:
+    # ---------------------------------------------------
+    # 4. Trigger Attack (S-mode Attempt)
+    # ---------------------------------------------------
+    li a0, 0x80200000       # Address protected by PMP0
+    li t1, 0xDEADBEEF
+
+    # Attempt write! Should trigger Exception 7 (Store Access Fault)
+    sw t1, 0(a0)
+
+    # If we survive, experiment failed
+    li a0, 0
+    j stop
+
+stop:
+    j stop
+
+trap_handler:
+    # Read mcause to check exception type
+    csrr t0, mcause
+
+    # Exception 7 = Store Access Fault
+    li t1, 7
+    bne t0, t1, unexpected
+
+    # SUCCESS: PMP blocked the illegal write!
+    li a0, 1                # Return success code
+    j stop
+
+unexpected:
+    li a0, -1               # Unexpected exception
+    j stop
+```
+
+### Compile and Run
+
+```bash
+# Assemble
+riscv64-unknown-elf-as -march=rv64g -o pmp_lab.o pmp_lab.S
+
+# Link (ensure _start is entry point)
+riscv64-unknown-elf-ld -T link.ld -o pmp_lab.elf pmp_lab.o
+
+# Run on QEMU
+qemu-system-riscv64 -machine virt -nographic -bios pmp_lab.elf
+```
+
+### Expected Behavior
+
+1. **M-mode**: PMP entries configured, firewall activated
+2. **mret**: Privilege drops to S-mode
+3. **sw instruction**: Triggers Store Access Fault (Exception 7)
+4. **Trap handler**: Confirms PMP did its job
+
+> **danieRTOS Reference**: A real RTOS would use PMP to isolate kernel data from user tasks, preventing task corruption.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: PMP Priority Order Error
+
+**Error Scenario**: Put "deny rule" in pmp15, put "allow rule" in pmp0.
+
+**Consequence**: pmp0 matches first, allowing all access. The deny rule never takes effect.
+
+```c
+// ❌ Wrong: Order reversed
+pmp0: Allow All (RWX)      // Matches first, permits everything
+pmp1: Deny 0x80200000      // Never gets checked
+
+// ✅ Correct: Write specific Deny first, generic Allow last
+pmp0: Read-Only 0x80200000 // Check sensitive region first
+pmp1: Allow All            // Allow other regions
+```
+
+> 💡 **Memory aid**: Like firewall rules, **write exceptions first, default last**.
+
+### Pitfall 2: Forgetting the Default Deny Rule
+
+**Error Scenario**: Only set one PMP Entry to protect the key area, forgot to open other memory.
+
+**Consequence**: Code region not matched by any PMP Entry, S/U-mode can't even fetch the next instruction.
+
+```assembly
+# ❌ Wrong: Only one Entry
+csrw pmpaddr0, t0       # Protect key
+csrw pmpcfg0, 0x19      # Read-Only
+mret                    # Jump to S-mode then immediately Crash!
+
+# ✅ Correct: Add Allow All Entry
+csrw pmpaddr0, t0       # Protect key
+csrw pmpaddr1, t1       # Max address
+csrw pmpcfg0, 0x0F19    # pmp0=RO, pmp1=RWX
+```
+
+### Pitfall 3: Lock Bit Irreversibility
+
+**Error Scenario**: Setting Lock bit (L=1) during development.
+
+**Consequence**: PMP Entry locked. Only hardware Reset can unlock. Cannot modify rules during debug.
+
+```c
+// ❌ Dangerous: Setting Lock during development
+pmpcfg0 = 0x99;  // L=1, A=NAPOT, R=1
+
+// ✅ Recommended: Only set Lock in Production
+#ifdef PRODUCTION
+    pmpcfg0 = 0x99;  // Locked
+#else
+    pmpcfg0 = 0x19;  // Dev mode, not locked
+#endif
+```
+
+> 💡 **Reminder**: Lock bit is meant to prevent malicious modification of M-mode Firmware. Don't use it during development.
 
 ---
 

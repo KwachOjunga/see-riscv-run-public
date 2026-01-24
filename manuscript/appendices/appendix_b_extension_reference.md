@@ -4,6 +4,107 @@
 
 ---
 
+> 💡 **Usage Guide**: This appendix is your "menu" during project planning. When deciding which extensions your project needs, reference the decision guide here.
+
+---
+
+## 🧩 Extension Selection Guide (Decision Guide)
+
+### Quick Decision Table
+
+| Extension | Full Name | When to Use? | Dependencies | Recommendation |
+|-----------|-----------|--------------|--------------|----------------|
+| **M** | Multiply/Divide | Almost all projects need it | None | ✅ Strongly recommended |
+| **A** | Atomic | Multi-core, OS, Lock-free | None | ✅ Required for OS |
+| **F** | Single Float | Floating-point (games, scientific) | None | As needed |
+| **D** | Double Float | High-precision floating-point | F | As needed |
+| **C** | Compressed | Reduce code size 20-30% | None | ✅ Strongly recommended |
+| **V** | Vector | AI/DSP/Matrix operations | D | Required for HPC |
+| **Zba** | Address Gen | Heavy array access `a[i*4]` | None | Performance optimization |
+| **Zbb** | Bit Manipulation | Bit operations (popcount, clz) | None | Performance optimization |
+| **Zbs** | Single-bit | Single-bit operations | None | Performance optimization |
+| **Zicsr** | CSR Access | CSR access (separated from I) | None | ✅ Required for system code |
+| **Zifencei** | Fence.I | Instruction cache sync (JIT) | None | Required for self-modifying code |
+
+### Common Combinations (Profiles)
+
+```text
+Minimal Embedded:     RV32IMC      (Multiply + Compressed)
+Standard Embedded:    RV32IMAC     (+ Atomic operations)
+Application Proc:     RV64IMAFDC   (= RV64GC, full general-purpose)
+High-Performance:     RV64GCV      (+ Vector)
+```
+
+### Dependency Graph
+
+```text
+        ┌─────┐
+        │  I  │ (Base ISA)
+        └──┬──┘
+           │
+    ┌──────┼──────┬──────┬──────┐
+    ▼      ▼      ▼      ▼      ▼
+  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐
+  │ M │  │ A │  │ C │  │ F │  │Zicsr│
+  └───┘  └───┘  └───┘  └─┬─┘  └───┘
+                         │
+                         ▼
+                       ┌───┐
+                       │ D │
+                       └─┬─┘
+                         │
+                         ▼
+                       ┌───┐
+                       │ V │
+                       └───┘
+```
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Thinking G Includes C
+
+**Misconception**: `RV64G` includes compressed instructions.
+
+**Truth**: `G = IMAFD`, does NOT include C. For compressed instructions, explicitly write `RV64GC`.
+
+```bash
+# ❌ Wrong: Assuming G has compression
+riscv64-unknown-elf-gcc -march=rv64g ...
+
+# ✅ Correct: Explicitly add C
+riscv64-unknown-elf-gcc -march=rv64gc ...
+```
+
+### Pitfall 2: Forgetting Zicsr and Zifencei
+
+**Background**: Starting from RISC-V 2.1 spec, CSR instructions and FENCE.I were separated from I.
+
+**Impact**: Some toolchains require explicit specification.
+
+```bash
+# If compiler complains about missing csrr/csrw
+riscv64-unknown-elf-gcc -march=rv64gc_zicsr_zifencei ...
+```
+
+### Pitfall 3: misa Can Only Be Read in M-mode
+
+**Error Scenario**: Trying to read `misa` to detect extensions in S-mode or U-mode.
+
+**Solution**: Use SBI query, or record during M-mode initialization.
+
+```c
+// ❌ In S-mode, this triggers Illegal Instruction
+uint64_t misa;
+asm volatile ("csrr %0, misa" : "=r" (misa));
+
+// ✅ Query via SBI or Device Tree
+// Or save misa to global variable during M-mode boot
+```
+
+---
+
 This appendix provides a comprehensive reference for RISC-V ISA extensions. RISC-V's modular design allows implementations to include only the extensions they need, from minimal embedded systems to high-performance application processors.
 
 ---

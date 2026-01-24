@@ -4,6 +4,49 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand SBI Architecture**: Grasp the layered design and value of the Supervisor Binary Interface
+2. **Master SBI Calling Convention**: Know the roles of `a7` (EID), `a6` (FID), `a0-a5` (Args)
+3. **Implement SBI Calls**: Make `ecall` requests to OpenSBI services
+4. **Understand Exception Delegation**: Know how M-mode delegates traps to S-mode
+5. **Distinguish M-mode and S-mode Responsibilities**: Understand why RISC-V encourages thin M-mode
+
+---
+
+## 💡 Scenario: Please Get the Manager
+
+> **Scene**: Junior is pulling his hair at the screen—the UART driver from the last chapter doesn't work on the new board.
+
+**Junior**: "Senior, I'm going crazy. Remember the UART driver we wrote last chapter? I just switched to a different board to try it out, and after digging through the datasheet, I found this board's UART address is `0x54000000`, not `0x10000000`. Do I have to modify the code every time I switch boards?"
+
+**Senior**: "That's exactly why we need **SBI (Supervisor Binary Interface)**. What you're doing now is like going to a restaurant and rushing into the kitchen to cook your own food. Change restaurants (hardware), the kitchen layout is different, and you don't know how to cook anymore."
+
+**Junior**: "So what should I do?"
+
+**Senior**: "You need to learn to 'call the manager.' In RISC-V, **M-mode (OpenSBI)** is that manager.
+
+You (S-mode Kernel) just need to sit at your table and use the standard format (SBI Call) to shout: 'Manager, please print a character for me!'
+
+The manager receives your request, looks up this restaurant's kitchen layout, and prints the character for you. This way, no matter which restaurant you go to, as long as you know how to call the manager, you're fine."
+
+**Junior**: "Sounds much easier! How do I call?"
+
+**Senior**: "Use the `ecall` instruction. But before calling, you need to write your request on specific 'sticky notes' (Registers):
+
+| Register | Purpose | Analogy |
+|----------|---------|---------|
+| `a7` | Extension ID (EID) | Which department? |
+| `a6` | Function ID (FID) | What service? |
+| `a0-a5` | Arguments | Service parameters |
+| `a0, a1` | Return Values | Manager's reply |
+
+Come on, let's try it."
+
+---
+
 Machine mode is RISC-V's highest privilege level, with unrestricted access to all hardware resources. But with great power comes great responsibility—M-mode firmware must be minimal, robust, and provide essential services to supervisor mode software. This chapter explores how to design M-mode firmware, implement SBI services, and support advanced features like virtualization and security.
 
 Unlike monolithic firmware architectures, RISC-V encourages a thin M-mode layer that delegates most functionality to S-mode. This design philosophy keeps M-mode simple and portable while allowing rich OS features in S-mode. We'll examine M-mode firmware design patterns, the Supervisor Binary Interface (SBI) specification, hypervisor support through the H extension, and security features like Physical Memory Protection (PMP) and the WorldGuard extension.
@@ -797,6 +840,223 @@ void enable_m_mode_lockdown(void) {
 **RISC-V security philosophy**: Provide minimal hardware mechanisms (PMP), build rich security features in software (TEE frameworks like Keystone, Penglai).
 
 **ARM TrustZone philosophy**: Provide rich hardware support for secure world, standardize TEE architecture.
+
+---
+
+## 🛠️ Hands-on Lab: Lab 10.1 — Saying Hello Through the Counter (SBI Call)
+
+This lab demonstrates the standard SBI call flow. We'll use OpenSBI (bundled with QEMU) and place our kernel at `0x80200000` (the default payload address OpenSBI jumps to).
+
+### Lab Objectives
+
+1. Wrap an `sbi_call` Assembly function
+2. Call **Legacy Extension (EID=1)** to output characters
+3. Call **Base Extension (EID=0x10)** to query SBI version
+
+### Project Structure
+
+```text
+lab10/
+├── link.ld     # Memory layout (note the different start address)
+├── sbi.S       # SBI Wrapper and entry point
+└── kernel.c    # Main program
+```
+
+### Code
+
+**File 1: `link.ld`**
+
+Note: When using QEMU `-bios default` (OpenSBI), it loads itself at `0x80000000` and jumps to `0x80200000` to execute our kernel.
+
+```ld
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
+
+SECTIONS
+{
+  /* OpenSBI default jump address */
+  . = 0x80200000;
+
+  .text : {
+    *(.text.boot)
+    *(.text)
+  }
+  .data : { *(.data) }
+  .bss : { *(.bss) }
+
+  . = . + 0x1000;
+  _stack_top = .;
+}
+```
+
+**File 2: `sbi.S` (SBI Wrapper)**
+
+```assembly
+.section .text.boot
+.global _start
+.global sbi_call
+
+# Program entry
+_start:
+    la sp, _stack_top
+    call kernel_main
+loop:
+    j loop
+
+# long sbi_call(long ext, long fid, long arg0, long arg1, long arg2)
+# C calling: a0=ext, a1=fid, a2=arg0, a3=arg1, a4=arg2
+sbi_call:
+    mv a7, a0       # ext -> a7 (EID)
+    mv a6, a1       # fid -> a6 (FID)
+    mv a0, a2       # arg0 -> a0
+    mv a1, a3       # arg1 -> a1
+    mv a2, a4       # arg2 -> a2
+
+    ecall           # Trigger Environment Call (trap to M-mode)
+
+    ret             # Return a0 (return value)
+```
+
+**File 3: `kernel.c`**
+
+```c
+#include <stdint.h>
+
+// SBI Extension IDs
+#define SBI_EID_CONSOLE_PUTCHAR 0x01  // Legacy Console
+#define SBI_EID_BASE            0x10  // Base Extension
+
+// Base Extension Function IDs
+#define SBI_FID_GET_SPEC_VERSION 0
+
+// External Assembly function
+long sbi_call(long ext, long fid, long arg0, long arg1, long arg2);
+
+// Character output (via SBI)
+void putchar(char c) {
+    sbi_call(SBI_EID_CONSOLE_PUTCHAR, 0, c, 0, 0);
+}
+
+void print_str(const char *s) {
+    while (*s) {
+        putchar(*s++);
+    }
+}
+
+// Query SBI version
+void print_sbi_version(void) {
+    long version = sbi_call(SBI_EID_BASE, SBI_FID_GET_SPEC_VERSION, 0, 0, 0);
+    long major = (version >> 24) & 0x7f;
+    long minor = version & 0xffffff;
+
+    print_str("SBI Spec Version: ");
+    putchar('0' + major);
+    putchar('.');
+    putchar('0' + minor);
+    putchar('\n');
+}
+
+void kernel_main(void) {
+    print_str("Hello from S-mode via SBI!\n");
+    print_sbi_version();
+
+    while (1) {}
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile
+riscv64-unknown-elf-gcc -nostdlib -nostartfiles -T link.ld \
+    -o kernel sbi.S kernel.c
+
+# Run (QEMU with OpenSBI)
+qemu-system-riscv64 -machine virt -nographic -bios default -kernel kernel
+```
+
+**Expected Output**:
+
+```
+OpenSBI v1.2
+   ...
+Hello from S-mode via SBI!
+SBI Spec Version: 1.0
+```
+
+### Comparison: Lab 9 vs Lab 10
+
+| Item | Lab 9 (Bare-metal) | Lab 10 (SBI) |
+|------|-------------------|--------------|
+| **Start Address** | 0x80000000 | 0x80200000 |
+| **UART Access** | Direct MMIO write | Via SBI ecall |
+| **Portability** | ❌ Hardware-dependent | ✅ Cross-platform |
+| **Complexity** | Simple but fragile | Requires SBI spec knowledge |
+
+> **danieRTOS Reference**: The danieRTOS console uses SBI calls for portable output across different RISC-V platforms.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Confusing EID and FID
+
+**Error Scenario**: Putting Extension ID in `a6` and Function ID in `a7`.
+
+**Consequence**: Calls wrong service, may crash or hang the system.
+
+```assembly
+# ❌ Wrong: EID and FID positions swapped
+    li a6, 0x10      # This should be EID, but it's in a6
+    li a7, 0         # This should be FID, but it's in a7
+    ecall
+
+# ✅ Correct
+    li a7, 0x10      # a7 = EID (Extension ID)
+    li a6, 0         # a6 = FID (Function ID)
+    ecall
+```
+
+### Pitfall 2: Forgetting OpenSBI Occupies 0x80000000
+
+**Error Scenario**: When using OpenSBI, still placing kernel at 0x80000000.
+
+**Consequence**: Kernel overwrites OpenSBI's memory, causing SBI calls to fail.
+
+```ld
+/* ❌ Wrong: Conflicts with OpenSBI */
+. = 0x80000000;
+
+/* ✅ Correct: Use OpenSBI's default payload address */
+. = 0x80200000;
+```
+
+### Pitfall 3: Misusing Legacy Extensions
+
+**Error Scenario**: Using deprecated Legacy Extensions that newer OpenSBI may not support.
+
+**Consequence**: SBI call returns `-2` (SBI_ERR_NOT_SUPPORTED).
+
+```c
+// ⚠️ Legacy Extensions (EID 0-8) are marked deprecated
+// Newer OpenSBI may not support them
+sbi_call(0x01, 0, 'A', 0, 0);  // console_putchar
+
+// ✅ Recommended: Use newer Extensions
+// Debug Console Extension (EID = 0x4442434E)
+#define SBI_EID_DBCN  0x4442434E
+#define SBI_FID_DBCN_WRITE_BYTE 2
+sbi_call(SBI_EID_DBCN, SBI_FID_DBCN_WRITE_BYTE, 'A', 0, 0);
+```
+
+> 💡 **Tip**: In production, check if an SBI Extension is available:
+> ```c
+> // Use Base Extension's probe_extension
+> #define SBI_FID_PROBE_EXTENSION 3
+> long result = sbi_call(SBI_EID_BASE, SBI_FID_PROBE_EXTENSION,
+>                        target_eid, 0, 0);
+> // result > 0 means the Extension is available
+> ```
 
 ---
 

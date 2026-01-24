@@ -4,6 +4,49 @@
 
 ---
 
+## 🎯 學習目標
+
+讀完本章後，你將能夠：
+
+1. **理解 SBI 架構**：掌握 Supervisor Binary Interface 的分層設計與價值
+2. **掌握 SBI Calling Convention**：明白 `a7` (EID)、`a6` (FID)、`a0-a5` (Args) 的角色
+3. **實作 SBI 呼叫**：能夠透過 `ecall` 呼叫 OpenSBI 服務
+4. **理解 Exception Delegation**：明白 M-mode 如何將 trap 委派給 S-mode
+5. **區分 M-mode 與 S-mode 責任**：理解為什麼 RISC-V 鼓勵 thin M-mode
+
+---
+
+## 💡 情境引入：請叫經理出來
+
+> **場景**：小華對著螢幕抓頭，上一章寫的 UART 驅動在新開發板上不能用。
+
+**小華**：「杰哥，我快瘋了。上一章我們不是寫了一個 UART 驅動嗎？我剛換了一塊板子想試試，結果查了半天 Datasheet 發現這塊板子的 UART 地址是 `0x54000000`，不是之前的 `0x10000000`。難道我每換一塊板子就要改一次程式碼？」
+
+**阿杰**：「這就是為什麼我們需要 **SBI (Supervisor Binary Interface)**。你現在的做法就像是去餐廳吃飯，還要自己衝進廚房炒菜。換一家餐廳（換硬體），廚房配置不一樣，你就不會炒了。」
+
+**小華**：「那該怎麼辦？」
+
+**阿杰**：「你要學會『呼叫經理』。在 RISC-V 裡，**M-mode (OpenSBI)** 就是那個經理。
+
+你 (S-mode Kernel) 只要負責坐在位子上，用標準的格式（SBI Call）喊一聲：『經理，幫我印個字！』
+
+經理接到請求後，會自己去查看這家餐廳的廚房配置，幫你把字印出來。這樣不管你去哪家餐廳，只要會喊經理就行了。」
+
+**小華**：「聽起來省事多了！那要怎麼喊？」
+
+**阿杰**：「用 `ecall` 指令。但在喊之前，你得先把需求寫在特定的『便條紙』(Register) 上：
+
+| 暫存器 | 用途 | 比喻 |
+|-------|------|------|
+| `a7` | Extension ID (EID) | 找哪個部門？ |
+| `a6` | Function ID (FID) | 辦什麼業務？ |
+| `a0-a5` | Arguments | 業務參數 |
+| `a0, a1` | Return Values | 經理的回覆 |
+
+來，我們試試看。」
+
+---
+
 Machine mode 是 RISC-V 的最高 privilege level，具有對所有 hardware resource 的無限制存取。但權力越大，責任越大 — M-mode firmware 必須是 minimal、robust 的，並為 supervisor mode software 提供 essential service。本章探討如何設計 M-mode firmware、實作 SBI service，以及支援 virtualization 和 security 等 advanced feature。
 
 與 monolithic firmware architecture 不同，RISC-V 鼓勵一個 thin M-mode layer，將大部分功能 delegate 到 S-mode。這種設計哲學保持 M-mode 簡單和可移植，同時允許 S-mode 中的 rich OS feature。我們將檢視 M-mode firmware design pattern、Supervisor Binary Interface (SBI) specification、通過 H extension 的 hypervisor support，以及 Physical Memory Protection (PMP) 和 WorldGuard extension 等 security feature。
@@ -797,6 +840,246 @@ void enable_m_mode_lockdown(void) {
 **RISC-V security philosophy**：提供 minimal hardware mechanism（PMP），在 software 中構建 rich security feature（TEE framework 如 Keystone、Penglai）。
 
 **ARM TrustZone philosophy**：為 secure world 提供 rich hardware support，標準化 TEE architecture。
+
+---
+
+## 🛠️ 實作練習：Lab 10.1 — 透過櫃台說 Hello (SBI Call)
+
+這個 Lab 將展示標準的 SBI 呼叫流程。我們會用到 OpenSBI (QEMU 自帶)，並將我們的 Kernel 放在 `0x80200000` (這是 OpenSBI 預設跳轉的 Payload 地址)。
+
+### 實驗目標
+
+1. 封裝一個 `sbi_call` 的 Assembly 函數
+2. 呼叫 **Legacy Extension (EID=1)** 輸出字元
+3. 呼叫 **Base Extension (EID=0x10)** 查詢 SBI 版本
+
+### 專案結構
+
+```text
+lab10/
+├── link.ld     # 記憶體佈局 (注意起始地址改變)
+├── sbi.S       # SBI Wrapper 和入口點
+└── kernel.c    # 主程式
+```
+
+### 程式碼
+
+**檔案 1: `link.ld`**
+
+注意：使用 QEMU `-bios default` (OpenSBI) 時，它會把自己載入 `0x80000000`，並跳轉到 `0x80200000` 執行我們的 Kernel。
+
+```ld
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
+
+SECTIONS
+{
+  /* OpenSBI 預設跳轉地址 */
+  . = 0x80200000;
+
+  .text : {
+    *(.text.boot)
+    *(.text)
+  }
+  .data : { *(.data) }
+  .bss : { *(.bss) }
+
+  . = . + 0x1000;
+  _stack_top = .;
+}
+```
+
+**檔案 2: `sbi.S` (SBI Wrapper)**
+
+```assembly
+.section .text.boot
+.global _start
+.global sbi_call
+
+# 程式入口
+_start:
+    la sp, _stack_top
+    call kernel_main
+loop:
+    j loop
+
+# long sbi_call(long ext, long fid, long arg0, long arg1, long arg2)
+# C 呼叫時: a0=ext, a1=fid, a2=arg0, a3=arg1, a4=arg2
+sbi_call:
+    mv a7, a0       # ext -> a7 (EID)
+    mv a6, a1       # fid -> a6 (FID)
+    mv a0, a2       # arg0 -> a0
+    mv a1, a3       # arg1 -> a1
+    mv a2, a4       # arg2 -> a2
+
+    ecall           # 觸發 Environment Call (陷入 M-mode)
+
+    ret             # 返回 a0 (回傳值)
+```
+
+**檔案 3: `kernel.c`**
+
+```c
+#include <stdint.h>
+
+// SBI Extension IDs
+#define SBI_EID_CONSOLE_PUTCHAR 0x01  // Legacy Console
+#define SBI_EID_BASE            0x10  // Base Extension
+
+// Base Extension Function IDs
+#define SBI_FID_GET_SPEC_VERSION 0
+
+// 外部 Assembly 函數
+long sbi_call(long ext, long fid, long arg0, long arg1, long arg2);
+
+// 字元輸出 (透過 SBI)
+void putchar(char c) {
+    sbi_call(SBI_EID_CONSOLE_PUTCHAR, 0, c, 0, 0);
+}
+
+void print_str(const char *s) {
+    while (*s) {
+        putchar(*s++);
+    }
+}
+
+// 查詢 SBI 版本
+long get_sbi_version(void) {
+    return sbi_call(SBI_EID_BASE, SBI_FID_GET_SPEC_VERSION, 0, 0, 0);
+}
+
+void print_hex(long val) {
+    print_str("0x");
+    for (int i = 7; i >= 0; i--) {
+        int nibble = (val >> (i * 4)) & 0xF;
+        putchar(nibble < 10 ? '0' + nibble : 'a' + nibble - 10);
+    }
+}
+
+void kernel_main(void) {
+    print_str("Hello from S-mode via SBI!\n");
+
+    long version = get_sbi_version();
+    print_str("SBI Spec Version: ");
+    print_hex(version);
+    print_str("\n");
+
+    // 解析版本號 (major.minor)
+    int major = (version >> 24) & 0x7F;
+    int minor = version & 0xFFFFFF;
+    print_str("(Major: ");
+    putchar('0' + major);
+    print_str(", Minor: ");
+    putchar('0' + minor);
+    print_str(")\n");
+}
+```
+
+### 編譯與執行
+
+```bash
+# 編譯
+riscv64-unknown-elf-gcc -march=rv64g -mabi=lp64 -mcmodel=medany \
+    -nostdlib -nostartfiles -T link.ld \
+    -o kernel.elf sbi.S kernel.c
+
+# 執行 (使用 OpenSBI)
+# -bios default: 使用 QEMU 內建的 OpenSBI
+qemu-system-riscv64 -machine virt -bios default \
+    -kernel kernel.elf -nographic
+```
+
+### 預期輸出
+
+```text
+OpenSBI v1.x
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+...
+
+Hello from S-mode via SBI!
+SBI Spec Version: 0x01000000
+(Major: 1, Minor: 0)
+```
+
+### 對比：Lab 9 vs Lab 10
+
+| 項目 | Lab 9 (Bare-metal) | Lab 10 (SBI) |
+|------|-------------------|--------------|
+| **起始地址** | 0x80000000 | 0x80200000 |
+| **UART 存取** | 直接寫入 MMIO | 透過 SBI ecall |
+| **可移植性** | ❌ 硬體相依 | ✅ 跨平台 |
+| **複雜度** | 簡單但脆弱 | 需要理解 SBI 規範 |
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：EID 與 FID 搞混
+
+**錯誤情境**：把 Extension ID 放到 `a6`，Function ID 放到 `a7`。
+
+**後果**：呼叫到錯誤的服務，可能導致系統崩潰或無反應。
+
+```assembly
+# ❌ 錯誤：EID 和 FID 位置顛倒
+    li a6, 0x10      # 這應該是 EID，卻放到 a6
+    li a7, 0         # 這應該是 FID，卻放到 a7
+    ecall
+
+# ✅ 正確
+    li a7, 0x10      # a7 = EID (Extension ID)
+    li a6, 0         # a6 = FID (Function ID)
+    ecall
+```
+
+### 陷阱 2：忘記 OpenSBI 佔用 0x80000000
+
+**錯誤情境**：在使用 OpenSBI 時，仍然把 Kernel 放在 0x80000000。
+
+**後果**：Kernel 會覆蓋 OpenSBI 的記憶體，導致 SBI 呼叫失敗。
+
+```ld
+/* ❌ 錯誤：與 OpenSBI 衝突 */
+. = 0x80000000;
+
+/* ✅ 正確：使用 OpenSBI 預設的 Payload 地址 */
+. = 0x80200000;
+```
+
+### 陷阱 3：誤用 Legacy Extension
+
+**錯誤情境**：使用已被棄用的 Legacy Extension，而新版 OpenSBI 已不支援。
+
+**後果**：SBI 呼叫返回 `-2` (SBI_ERR_NOT_SUPPORTED)。
+
+```c
+// ⚠️ Legacy Extension (EID 0-8) 已被標記為 deprecated
+// 新版 OpenSBI 可能不支援
+sbi_call(0x01, 0, 'A', 0, 0);  // console_putchar
+
+// ✅ 推薦使用新版 Extension
+// Debug Console Extension (EID = 0x4442434E)
+#define SBI_EID_DBCN  0x4442434E
+#define SBI_FID_DBCN_WRITE_BYTE 2
+sbi_call(SBI_EID_DBCN, SBI_FID_DBCN_WRITE_BYTE, 'A', 0, 0);
+```
+
+> 💡 **提示**：在生產環境中，建議檢查 SBI Extension 是否可用：
+> ```c
+> // 使用 Base Extension 的 probe_extension 檢查
+> #define SBI_FID_PROBE_EXTENSION 3
+> long result = sbi_call(SBI_EID_BASE, SBI_FID_PROBE_EXTENSION,
+>                        target_eid, 0, 0);
+> // result > 0 表示該 Extension 可用
+> ```
 
 ---
 

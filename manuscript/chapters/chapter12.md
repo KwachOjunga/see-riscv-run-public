@@ -4,6 +4,48 @@
 
 ---
 
+## 🎯 Learning Objectives
+
+After reading this chapter, you will be able to:
+
+1. **Understand SISD vs SIMD**: Grasp the difference between scalar and vector operations
+2. **Master VLA Core Concepts**: Understand the value of Vector-Length Agnostic design
+3. **Use the vsetvli Instruction**: Perform Strip-mining (chunked processing)
+4. **Write Vector Loops**: Master the standard VLA loop structure
+5. **Compare Different SIMD Architectures**: Understand RISC-V V vs ARM SVE vs x86 AVX differences
+
+---
+
+## 💡 Scenario: The Flexible Noodle Cutter
+
+> **Scene**: Junior is staring at SIMD code on the screen, frustrated.
+
+**Junior**: "Architect, this is painful. I wrote an optimized version for 128-bit hardware before. Now the company switched to a new chip that supports 512-bit. My original loop only cuts 4 floats at a time, but now I could cut 16. I have to rewrite the entire loop logic, including the 'tail' handling."
+
+**Architect**: "That's the downside of **Fixed-width SIMD**. It's like a **fixed-size cookie cutter**. Using a small cutter on a big dough is inefficient; switch to a bigger cutter, and your old recipe (code) doesn't work anymore."
+
+**Junior**: "How does RISC-V solve this?"
+
+**Architect**: "RISC-V's **V (Vector) Extension** uses a design called **VLA (Vector-Length Agnostic)**.
+
+Imagine you have a **'smart noodle cutting machine'**. You don't need to tell it 'I want 4 pieces' or 'I want 16 pieces.' You just say: '**Here's a big lump of dough (total length N), please cut it with your maximum capacity.**'"
+
+**Junior**: "Maximum capacity?"
+
+**Architect**: "Right. The hardware responds: 'Report: my blade can cut 8 pieces at a time (vl).'
+
+Then you cut 8 pieces, push the dough forward, and ask again.
+
+When you're down to the last 3 pieces of dough, you don't need to change cutters—the hardware automatically tells you: 'This time I'll only cut 3.'
+
+Code written this way runs on 128-bit or 1024-bit machines without changing a single line, automatically achieving maximum performance."
+
+**Junior**: "Wow, even the tail is handled automatically? Teach me this instruction!"
+
+**Architect**: "This is the legendary artifact: `vsetvli`."
+
+---
+
 Modern applications increasingly demand data-parallel processing. Image processing applies the same filter to millions of pixels. Machine learning performs matrix operations on thousands of elements. Scientific simulations compute physics equations across vast grids. These workloads share a common pattern: the same operation repeated on different data.
 
 Traditional scalar processors handle one operation at a time. To process 1000 elements, they execute 1000 separate instructions. Vector processors, by contrast, operate on multiple elements simultaneously with a single instruction—Single Instruction, Multiple Data (SIMD). This can provide 4×, 8×, or even greater speedups for data-parallel code.
@@ -620,6 +662,220 @@ Compared to NEON and AVX, RISC-V V offers:
 | **Ratification** | 1999 (SSE)<br/>2011 (AVX)<br/>2016 (AVX-512) | 2005 | 2016 | 2021 |
 | **Key Advantage** | Mature ecosystem | Simple, widely deployed | Scalable, predication | Scalable, simple, future-proof |
 | **Key Limitation** | Fixed widths, complexity | Fixed 128-bit only | Complex instruction set | Newer, less mature tooling |
+
+---
+
+## 🛠️ Hands-on Lab: Lab 12.1 — Vector Addition
+
+This lab demonstrates the classic VLA loop structure—the foundational pattern for RISC-V Vector programming.
+
+### Lab Objectives
+
+1. Write RISC-V Vector Assembly to implement C[i] = A[i] + B[i]
+2. Understand the meaning of `vsetvli`'s return value `vl`
+3. Compare the structure of Scalar Loop vs Vector Loop
+
+### Strip-mining Loop Structure
+
+This is the core pattern of VLA programming:
+
+```text
+while (n > 0) {
+    vl = vsetvli(n);    // Ask hardware: how many can you handle?
+    load(vl elements);   // Load vl elements
+    compute();           // Execute operation
+    store(vl elements);  // Store vl elements
+    n -= vl;             // Decrease remaining count
+    pointers += vl;      // Advance pointers
+}
+```
+
+### Code
+
+**File 1: `vector_add.S`**
+
+```assembly
+# vector_add.S - Vector Addition (VLA version)
+.section .text
+.global vec_add
+
+# void vec_add(int *a, int *b, int *c, int n)
+# a0 = pointer to A
+# a1 = pointer to B
+# a2 = pointer to C
+# a3 = n (element count)
+
+vec_add:
+    # --- Strip-mining Loop ---
+loop:
+    # 1. Set vector length
+    # vsetvli rd, rs1, vtype
+    # t0: hardware returns actual elements it can process (vl)
+    # a3: remaining elements (AVL)
+    # e32: element size 32-bit
+    # m1: LMUL=1 (use 1 vector register)
+    # ta, ma: Tail/Mask Agnostic
+    vsetvli t0, a3, e32, m1, ta, ma
+
+    # 2. Load data
+    vle32.v v0, (a0)    # v0 = A[0:vl]
+    vle32.v v1, (a1)    # v1 = B[0:vl]
+
+    # 3. Execute addition
+    vadd.vv v2, v0, v1  # v2 = v0 + v1
+
+    # 4. Write back data
+    vse32.v v2, (a2)    # C[0:vl] = v2
+
+    # 5. Advance pointers (int32 = 4 bytes)
+    slli t1, t0, 2      # t1 = vl * 4
+    add a0, a0, t1      # A pointer advances
+    add a1, a1, t1      # B pointer advances
+    add a2, a2, t1      # C pointer advances
+
+    # 6. Update remaining count
+    sub a3, a3, t0      # n = n - vl
+
+    # 7. Continue loop
+    bnez a3, loop
+
+    ret
+```
+
+**File 2: `main.c`**
+
+```c
+#include <stdio.h>
+
+extern void vec_add(int *a, int *b, int *c, int n);
+
+#define N 100  // Intentionally not power of 2, to test tail handling
+
+int main(void) {
+    int a[N], b[N], c[N];
+
+    // Initialize
+    for (int i = 0; i < N; i++) {
+        a[i] = i;
+        b[i] = 100;
+        c[i] = 0;
+    }
+
+    printf("Starting Vector Add...\n");
+    vec_add(a, b, c, N);
+
+    // Verify
+    int error = 0;
+    for (int i = 0; i < N; i++) {
+        if (c[i] != a[i] + 100) {
+            error++;
+        }
+    }
+
+    if (error == 0) {
+        printf("SUCCESS: All %d elements correct!\n", N);
+    } else {
+        printf("FAILED: %d errors\n", error);
+    }
+
+    return 0;
+}
+```
+
+### Compile and Run
+
+```bash
+# Compile (requires V extension support)
+riscv64-unknown-elf-gcc -march=rv64gcv -o vec_add main.c vector_add.S
+
+# Run on QEMU with V extension
+qemu-riscv64 -cpu rv64,v=true vec_add
+```
+
+**Expected Output**:
+
+```
+Starting Vector Add...
+SUCCESS: All 100 elements correct!
+```
+
+### What You Just Did
+
+1. **vsetvli**: Asked hardware "how many elements can you process?" and got `vl` back
+2. **Automatic Tail Handling**: When N=100 and VLEN allows 8 elements per iteration, the last iteration automatically processes only 4 elements
+3. **Portable Code**: This same code runs on any VLEN (128-bit, 256-bit, 1024-bit) without modification
+
+> **danieRTOS Reference**: While danieRTOS doesn't use vector operations directly, understanding VLA patterns helps when optimizing memory copy operations in the kernel.
+
+---
+
+## ⚠️ Common Pitfalls
+
+### Pitfall 1: Unnecessarily Handling the Tail
+
+**Error Scenario**: Habituated to traditional SIMD, writing extra tail-handling loops.
+
+**Consequence**: Wasted effort, and may introduce bugs.
+
+```c
+// ❌ Wrong: No need to handle tail yourself
+void vec_add_wrong(int *a, int *b, int *c, int n) {
+    int i;
+    // Vector part
+    for (i = 0; i + 4 <= n; i += 4) {
+        // vector_add_4(a+i, b+i, c+i);
+    }
+    // Tail part (this is redundant in VLA!)
+    for (; i < n; i++) {
+        c[i] = a[i] + b[i];
+    }
+}
+
+// ✅ Correct: vsetvli handles tail automatically
+// See Assembly example above
+```
+
+### Pitfall 2: Assuming Fixed VLEN
+
+**Error Scenario**: Hardcoding assumptions like VLEN=256 or other specific values.
+
+**Consequence**: Program behaves incorrectly or performs poorly on different hardware.
+
+```assembly
+# ❌ Wrong: Assuming 8 elements per iteration
+loop:
+    li t0, 8              # Hardcoded!
+    vsetvli zero, t0, e32, m1, ta, ma
+    ...
+
+# ✅ Correct: Let hardware decide
+loop:
+    vsetvli t0, a3, e32, m1, ta, ma  # a3 = remaining count
+    ...
+```
+
+### Pitfall 3: Forgetting LMUL's Impact
+
+**Error Scenario**: Not understanding LMUL (Vector Register Group Multiplier).
+
+**Explanation**:
+- **LMUL=1**: Use 1 vector register (v0-v31)
+- **LMUL=2**: Use 2 registers as a group (v0-v1, v2-v3, ...)
+- **LMUL=4/8**: Larger groups
+
+```assembly
+# LMUL=1: Can use v0-v31 (32 independent registers)
+vsetvli t0, a3, e32, m1, ta, ma
+
+# LMUL=2: Can use v0, v2, v4, ... (16 groups, 2 each)
+vsetvli t0, a3, e32, m2, ta, ma
+# Now v0 and v1 are the same group, cannot be used separately
+
+# LMUL=8: Can use v0, v8, v16, v24 (4 groups, 8 each)
+vsetvli t0, a3, e32, m8, ta, ma
+```
+
+> 💡 **Tip**: LMUL > 1 can process more elements but reduces available register count. For simple vector addition, LMUL=1 is usually sufficient.
 
 ---
 

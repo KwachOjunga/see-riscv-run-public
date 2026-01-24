@@ -4,6 +4,107 @@
 
 ---
 
+> 💡 **使用指南**：本附錄是選型時的「菜單」。當你在決定專案需要哪些 Extension 時，參考這裡的決策指南。
+
+---
+
+## 🧩 Extension 選型指南 (Decision Guide)
+
+### 快速決策表
+
+| Extension | 全名 | 什麼時候該用？ | 相依性 | 建議 |
+|-----------|------|---------------|--------|------|
+| **M** | Multiply/Divide | 幾乎所有專案都需要 | 無 | ✅ 強烈建議 |
+| **A** | Atomic | 多核心、OS、Lock-free | 無 | ✅ 跑 OS 必備 |
+| **F** | Single Float | 浮點運算 (遊戲、科學計算) | 無 | 視需求 |
+| **D** | Double Float | 高精度浮點 | F | 視需求 |
+| **C** | Compressed | 減少 20-30% 程式碼大小 | 無 | ✅ 強烈建議 |
+| **V** | Vector | AI/DSP/矩陣運算 | D | 高效能運算必備 |
+| **Zba** | Address Gen | 大量陣列存取 `a[i*4]` | 無 | 效能優化 |
+| **Zbb** | Bit Manipulation | 位元操作 (popcount, clz) | 無 | 效能優化 |
+| **Zbs** | Single-bit | 單位元操作 | 無 | 效能優化 |
+| **Zicsr** | CSR Access | 存取 CSR (已從 I 分離) | 無 | ✅ 系統程式必備 |
+| **Zifencei** | Fence.I | 指令快取同步 (JIT) | 無 | 自修改程式碼必備 |
+
+### 常見組合 (Profiles)
+
+```text
+最小嵌入式:     RV32IMC      (乘法 + 壓縮)
+標準嵌入式:     RV32IMAC     (+ 原子操作)
+應用處理器:     RV64IMAFDC   (= RV64GC，完整通用)
+高效能運算:     RV64GCV      (+ 向量)
+```
+
+### 相依性圖
+
+```text
+        ┌─────┐
+        │  I  │ (Base ISA)
+        └──┬──┘
+           │
+    ┌──────┼──────┬──────┬──────┐
+    ▼      ▼      ▼      ▼      ▼
+  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐
+  │ M │  │ A │  │ C │  │ F │  │Zicsr│
+  └───┘  └───┘  └───┘  └─┬─┘  └───┘
+                         │
+                         ▼
+                       ┌───┐
+                       │ D │
+                       └─┬─┘
+                         │
+                         ▼
+                       ┌───┐
+                       │ V │
+                       └───┘
+```
+
+---
+
+## ⚠️ 常見陷阱
+
+### 陷阱 1：以為 G 包含 C
+
+**錯誤認知**：`RV64G` 包含壓縮指令。
+
+**真相**：`G = IMAFD`，不包含 C。要壓縮指令需要明確寫 `RV64GC`。
+
+```bash
+# ❌ 錯誤：以為 G 有壓縮
+riscv64-unknown-elf-gcc -march=rv64g ...
+
+# ✅ 正確：明確加上 C
+riscv64-unknown-elf-gcc -march=rv64gc ...
+```
+
+### 陷阱 2：忘記 Zicsr 和 Zifencei
+
+**背景**：從 RISC-V 2.1 規範開始，CSR 指令和 FENCE.I 被從 I 分離出來。
+
+**影響**：某些工具鏈需要明確指定。
+
+```bash
+# 如果編譯器報錯找不到 csrr/csrw
+riscv64-unknown-elf-gcc -march=rv64gc_zicsr_zifencei ...
+```
+
+### 陷阱 3：misa 只能在 M-mode 讀取
+
+**錯誤情境**：在 S-mode 或 U-mode 嘗試讀取 `misa` 檢測 Extension。
+
+**解決**：使用 SBI 查詢，或在 M-mode 初始化時記錄。
+
+```c
+// ❌ 在 S-mode 會觸發 Illegal Instruction
+uint64_t misa;
+asm volatile ("csrr %0, misa" : "=r" (misa));
+
+// ✅ 透過 SBI 或 Device Tree 查詢
+// 或在 M-mode 啟動時將 misa 存到全域變數
+```
+
+---
+
 本附錄提供 RISC-V ISA extension 的全面參考。RISC-V 的模組化設計允許 implementation 僅包含所需的 extension，從最小的 embedded system 到高性能 application processor。
 
 ---
