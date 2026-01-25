@@ -22,7 +22,7 @@ date: "January 2026"
 
 - 17 Chapters organized into 10 Parts
 - 6 Appendices with quick reference materials
-- ~160,000+ words (~550 pages)
+- ~100,000+ words (~400 pages)
 - Comprehensive coverage from ISA fundamentals to system design
 - Enhanced with Learning Objectives, Scenario Dialogues, Hands-on Labs, and Common Pitfalls
 

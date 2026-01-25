@@ -579,6 +579,31 @@ Congratulations! You've completed three important steps:
 
 > **danieRTOS Reference**: This lab establishes the foundation for all subsequent labs. The same toolchain setup is used in danieRTOS development.
 
+### Extended Challenge (Optional)
+
+Try using `objdump` to view the compiled assembly:
+
+```bash
+riscv64-unknown-elf-objdump -d hello | head -50
+```
+
+You'll see output similar to this:
+
+```assembly
+0000000000010000 <_start>:
+   10000:       00001197                auipc   gp,0x1
+   10004:       800980e7                jalr    gp
+   ...
+```
+
+These are RISC-V instructions! In subsequent chapters, we'll learn how to read these instructions.
+
+> 💡 **Note on Cross-Compilation**:
+>
+> - Host: The computer you're using (e.g., x86 Linux)
+> - Target: The platform you're compiling for (e.g., RISC-V)
+> - The Cross-Compiler's job is to generate Target code on the Host
+
 ---
 
 ## Summary

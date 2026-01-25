@@ -838,6 +838,12 @@ skip:
 
 > **danieRTOS Reference**: The danieRTOS Makefile uses `-march=rv64gc` to ensure all standard extensions are available.
 
+### Design Trade-off
+
+> 💭 **Why isn't the M Extension mandatory?**
+>
+> In extremely resource-constrained embedded systems (such as 8-bit compatible microcontrollers), chip designers may choose not to implement a hardware multiplier to save transistors. In such cases, the compiler automatically uses software emulation. RISC-V's modularity makes this trade-off possible—you only pay for what you need.
+
 ---
 
 ## ⚠️ Common Pitfalls

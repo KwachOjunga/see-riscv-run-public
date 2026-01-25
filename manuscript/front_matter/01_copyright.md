@@ -58,7 +58,7 @@ This is the complete book "See RISC-V Run: Fundamentals". The book contains:
 
 - **17 Chapters** organized into 10 Parts
 - **6 Appendices** with quick reference materials
-- **~160,000+ words** (~550 pages)
+- **~100,000+ words** (~400 pages)
 - Comprehensive coverage from ISA fundamentals to system design
 - **v0p11 Enhanced**: Learning Objectives, Scenario Dialogues, Hands-on Labs, Common Pitfalls
 

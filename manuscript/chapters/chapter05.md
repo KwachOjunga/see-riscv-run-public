@@ -590,6 +590,39 @@ You've accomplished the fundamental MMU setup:
 
 > **danieRTOS Reference**: The memory management in danieRTOS uses similar identity mapping for kernel space, with separate per-task mappings for user space.
 
+### Paper Exercise: Address Translation Drill
+
+Given an Sv39 Virtual Address: `0x0000_0040_1234_5678`
+
+Manually extract:
+
+1. **VPN[2]** = bits 38-30 = ?
+2. **VPN[1]** = bits 29-21 = ?
+3. **VPN[0]** = bits 20-12 = ?
+4. **Offset** = bits 11-0 = ?
+
+<details>
+<summary>Click to reveal answer</summary>
+
+```
+VA = 0x0000_0040_1234_5678
+   = 0b 0000...0001 000000001 000100011 010001010110 01111000
+
+VPN[2] = bits 38-30 = 0x001 = 1
+VPN[1] = bits 29-21 = 0x009 = 9
+VPN[0] = bits 20-12 = 0x234 = 564
+Offset = bits 11-0  = 0x678 = 1656
+```
+
+**Translation Process**:
+1. From `satp.PPN`, find the Root Table (Level 2)
+2. Use VPN[2]=1 as index, find Level 1 Table's PPN
+3. Use VPN[1]=9 as index, find Level 0 Table's PPN
+4. Use VPN[0]=564 as index, find the final Physical Page's PPN
+5. Physical Address = (PPN << 12) | Offset
+
+</details>
+
 ---
 
 ## ⚠️ Common Pitfalls

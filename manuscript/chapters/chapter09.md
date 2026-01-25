@@ -872,6 +872,24 @@ You've written a complete bare-metal program:
 
 > **danieRTOS Reference**: The danieRTOS entry point follows the same pattern—`entry.S` sets up SP and calls `kernel_main()`.
 
+### Deep Dive: QEMU Memory Map
+
+Why `0x10000000` and `0x80000000`? This is the QEMU virt machine's Memory Map:
+
+| Address Range | Purpose |
+|---------------|---------|
+| `0x0000_1000` | BootROM (Reset Vector) |
+| `0x1000_0000` | UART (we write characters here) |
+| `0x8000_0000` | DRAM (our program runs here) |
+
+This is the magic of **MMIO (Memory Mapped I/O)**: to the CPU, it's just writing to memory, but to the system, it's controlling peripheral devices.
+
+### Extended Challenge
+
+> 💭 **Try making the program print "Booting..." then do a simple count loop before printing "Done!"**
+>
+> This will give you a taste of how "primitive" the world is without a `sleep()` function.
+
 ---
 
 ## ⚠️ Common Pitfalls

@@ -58,7 +58,7 @@ The information in this book is based on publicly available specifications and d
 
 - **17 個章節**，分為 10 個部分
 - **6 個附錄**，包含快速參考資料
-- **約 160,000+ 字**（約 550 頁）
+- **約 100,000+ 字**（約 400 頁）
 - 從 ISA 基礎到系統設計的完整涵蓋
 - **v0p11 增強版**：學習目標、角色對話、Hands-on Labs、常見陷阱
 

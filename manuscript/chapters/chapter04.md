@@ -893,7 +893,20 @@ When the breakpoint hits, examine:
 (gdb) stepi                    # Step through handler
 ```
 
+You should observe:
+
+- `mcause = 2` (Illegal Instruction)
+- `mepc` points to the address of `.word 0xFFFFFFFF`
+- `mtval` may contain the encoding of the illegal instruction
+
 > **danieRTOS Reference**: The context switch mechanism in danieRTOS builds on these trap handling fundamentals, using `mret` to switch between tasks.
+
+### Key Concept: mepc Adjustment
+
+> 💭 **Why doesn't an Interrupt need to modify `mepc`, but an Exception does?**
+>
+> - **Interrupt**: Is "asynchronous"—it occurs between two instructions. `mepc` points to the "next instruction to execute." After handling the interrupt, continuing from there is correct.
+> - **Exception**: Is "synchronous"—triggered by the current instruction. `mepc` points to the "instruction that triggered the exception." If you don't modify `mepc`, `mret` will re-execute the same instruction, triggering the exception again, forming an infinite loop!
 
 ---
 
